@@ -18,6 +18,7 @@ set -euo pipefail
 
 MGMT_IP="${APPMOD_ONTAP_MGMT_IP:-<management-ip>}"
 SVM="${APPMOD_SVM:-appmodsvm}"
+# Example RFC1918 CIDR placeholder; override with APPMOD_SUBNET_CIDR for the real subnet.
 SUBNET_CIDR="${APPMOD_SUBNET_CIDR:-10.0.0.0/16}"
 
 note() { echo "stage1-nfs: $*"; }
