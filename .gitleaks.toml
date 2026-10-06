@@ -1,0 +1,69 @@
+title = "FSx-for-ONTAP-App-Modernization-Patterns gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "internal-ip-address"
+description = "Internal/Private IP Address"
+regex = '''(?:^|[^0-9])(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2[0-9]|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})(?:[^0-9]|$)'''
+tags = ["internal", "ip"]
+
+[[rules]]
+id = "aws-account-id-suspicious"
+description = "AWS Account ID in suspicious context"
+regex = '''(?i)(?:account[_-]?id|aws[_-]?account)\s*[:=]\s*["\']?\d{12}["\']?'''
+tags = ["aws", "account"]
+
+[[rules]]
+id = "internal-hostname"
+description = "Internal hostname patterns"
+# The suffix must terminate the hostname. A bare \b also matched the ".corp" inside
+# "corp.example.com", which made every RFC 2606 example domain a false positive.
+# Go RE2 has no lookahead, so the tail is expressed as end-of-line or a non-hostname char.
+regex = '''[\w-]+(?:\.[\w-]+)*\.(?:internal|corp|local)(?:$|[^\w.-])'''
+tags = ["internal", "hostname"]
+
+[[rules]]
+id = "netapp-internal"
+description = "NetApp internal references"
+regex = '''(?i)(?:[\w.-]+@netapp\.com|[\w.-]+\.netapp\.internal)'''
+tags = ["netapp", "internal"]
+
+[[rules]]
+id = "directory-credentials"
+description = "Active Directory / SVM administrator password assigned inline"
+# Stage 0 joins an SVM to AWS Managed Microsoft AD. The join password belongs in
+# AWS Secrets Manager and is referenced by ARN, never written into a file.
+regex = '''(?i)(?:ad|domain|svm|fsxadmin|vsadmin)[_-]?(?:admin[_-]?)?(?:password|pass|pwd)\s*[:=]\s*["\']?[^\s"\'$]{6,}["\']?'''
+tags = ["directory", "credentials"]
+
+[allowlist]
+# Markdown is deliberately NOT excluded here. A blanket '.*\.md$' entry silently
+# removed every document from the scan, which is the surface where resource IDs,
+# internal IPs and addresses are most likely to leak. Narrow allowlists below instead.
+#
+# templates/*.yaml and params/*.example.json carry placeholder resource IDs
+# (vpc-…, subnet-…, fsvol-…) that the default generic-api-key rule flags on
+# entropy. They are documented example values, not secrets, so those two paths
+# are allowlisted. Real secrets never enter these files (credentials go to
+# Secrets Manager and are referenced by ARN).
+paths = [
+  # Gitignored local areas: never committed, so a finding there is not a leak.
+  '''^\.venv/''',
+  '''^\.private/''',
+  '''^\.kiro/''',
+  '''^\.git/''',
+  '''-migration-[^/]*/''',
+  '''\.gitleaks\.toml$''',
+  '''\.gitignore$''',
+  '''.*\.example$''',
+  '''templates/.*\.yaml$''',
+  '''params/.*\.example\.json$''',
+]
+
+# Documented example values. Kept narrow on purpose: only the all-zero host address in
+# CIDR form is allowed, so a real address such as 10.1.23.45 still fires. # allow:pii
+regexes = [
+  '''10\.0\.0\.0/''',
+]

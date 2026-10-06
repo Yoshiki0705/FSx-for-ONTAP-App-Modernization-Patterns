@@ -1,0 +1,30 @@
+# IDE & Editor
+.kiro/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+# Environment & Secrets
+*.env
+.env.*
+*.pem
+*.key
+# Private operational notes and research
+.private/
+**/.private/
+# AIMF record repositories created by install.sh (<name>-migration-<date>/).
+# They hold the full working log and stay unpublished; only excerpts are committed.
+*-migration-*/
+# Temporary
+.tmp/
+*.tmp
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+# Node
+node_modules/

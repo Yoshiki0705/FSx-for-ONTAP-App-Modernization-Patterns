@@ -1,0 +1,34 @@
+{
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "Asia/Tokyo",
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 5,
+  "packageRules": [
+    {
+      "description": "GitHub Actions: keep SHA pins, surface the version in the PR",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true,
+      "semanticCommitType": "ci"
+    },
+    {
+      "description": "Python dev tooling stays exact-pinned; group into one PR",
+      "matchManagers": ["pip_requirements"],
+      "matchFileNames": ["requirements-dev.txt"],
+      "rangeStrategy": "pin",
+      "groupName": "python dev tooling",
+      "semanticCommitType": "chore"
+    },
+    {
+      "description": "Major bumps need a human; do not automerge",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security"]
+  }
+}

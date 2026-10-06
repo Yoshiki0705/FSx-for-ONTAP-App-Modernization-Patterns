@@ -1,0 +1,36 @@
+name: PR title check
+
+# Enforce Conventional Commits on the PR title. Squash-merge uses the PR title
+# as the commit subject, so this is what lands on main. Inline regex keeps the
+# supply chain thin: no third-party Action, nothing to SHA-pin or update.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: Conventional Commits title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        env:
+          # Read from the environment, never interpolated into the script body,
+          # so a title containing shell metacharacters cannot be executed.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|bench|chore|refactor|test|ci|perf|style)(\([a-z0-9,._-]+\))?!?: .+'
+          if printf '%s' "$PR_TITLE" | grep -qE "$pattern"; then
+            echo "PR title OK: $PR_TITLE"
+          else
+            echo "::error::PR title must follow Conventional Commits."
+            echo "Got:      $PR_TITLE"
+            echo "Expected: <type>(<optional-scope>): <description>"
+            echo "Types:    feat, fix, docs, bench, chore, refactor, test, ci, perf, style"
+            echo "Examples: feat: add S3 Access Points presigned URL support"
+            echo "          docs(readme): update deployment guide JA/EN"
+            exit 1
+          fi

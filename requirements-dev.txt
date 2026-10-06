@@ -1,0 +1,10 @@
+# Development toolchain, exact-pinned. Bump deliberately: change the version here,
+# run `make all`, fix what the new version finds, and commit both together.
+# The validators in tools/ and scripts/ are stdlib-only and are not listed here.
+ruff==0.16.7
+cfn-lint==1.56.3
+# Not installable via pip; install separately:
+#   markdownlint-cli2   npm install -g markdownlint-cli2@0.22.1
+#   gitleaks            brew install gitleaks
+#   shellcheck          brew install shellcheck
+#   cfn-guard           brew install cloudformation-guard

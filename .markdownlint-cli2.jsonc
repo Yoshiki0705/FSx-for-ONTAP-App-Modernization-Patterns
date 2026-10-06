@@ -1,0 +1,53 @@
+{
+  // Rules are tuned for a Japanese-primary documentation repository with heavy table use.
+  "config": {
+    "default": true,
+
+    // Line length: Japanese prose and wide comparison tables make a hard wrap counterproductive.
+    "MD013": false,
+
+    // Duplicate headings: intentional. Every module README reuses the same section names,
+    // and bilingual files repeat a heading in both languages.
+    "MD024": { "siblings_only": true },
+
+    // Inline HTML: <details>/<summary> is core to the progressive-disclosure structure, and
+    // <strong> is required inside <summary> because Markdown emphasis is not parsed there.
+    "MD033": { "allowed_elements": ["details", "summary", "strong", "br", "img", "a", "kbd"] },
+
+    // Single H1: a YAML frontmatter "title:" is metadata for the note schema, not a rendered
+    // heading, so it must not count as the document's top-level heading.
+    "MD025": { "front_matter_title": "" },
+
+    // First line must be an H1: GitHub issue and PR templates are rendered as form bodies, not
+    // as documents, and conventionally open at "##". Content files are covered by MD025 instead.
+    "MD041": false,
+
+    // Emphasis used as heading: the "> **Security note**:" callout pattern is deliberate.
+    "MD036": false,
+
+    // Bare URLs are flagged; we always use link syntax.
+    "MD034": true,
+
+    // Ordered list numbering: allow 1./2./3. style.
+    "MD029": { "style": "ordered" },
+
+    // Table delimiter style: the compact "|---|---|" form is used consistently across the
+    // sibling repositories. Enforcing padded delimiters would reformat every table here for
+    // no reader benefit and would diverge from the rest of the set.
+    "MD060": false,
+
+    // Blank line inside blockquote: two consecutive callouts separated by a blank line is a
+    // deliberate pattern (e.g. a Japanese note followed by its English counterpart).
+    "MD028": false,
+
+    // Trailing punctuation in headings: Japanese headings sometimes end with a full-width char.
+    "MD026": { "punctuation": ".,;:!。，；：！" }
+  },
+  "globs": ["**/*.md"],
+  "ignores": [
+    "node_modules/**",
+    ".private/**", // gitleaks:allow - path pattern, not committed content
+    ".kiro/**", // gitleaks:allow - path pattern, not committed content
+    "semantic-review/**" // review-agent output; the findings live in .private/reviews/
+  ]
+}
