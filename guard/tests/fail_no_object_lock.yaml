@@ -1,0 +1,21 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# Fixture: fails cfn-guard rule no_object_lock only. The artifacts bucket enables Object Lock, which
+# is irreversible WORM.
+Description: Fixture that must fail the no_object_lock rule.
+Rules:
+  RegionPinned:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', ap-northeast-1]
+        AssertDescription: Region pin.
+Resources:
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: appmod-artifacts-fixture
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            Mode: COMPLIANCE
+            Days: 365

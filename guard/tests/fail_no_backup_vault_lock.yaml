@@ -1,0 +1,17 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# Fixture: fails cfn-guard rule no_backup_vault_lock only. The Backup vault carries a
+# LockConfiguration (Vault Lock in compliance mode is irreversible).
+Description: Fixture that must fail the no_backup_vault_lock rule.
+Rules:
+  RegionPinned:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', ap-northeast-1]
+        AssertDescription: Region pin.
+Resources:
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    Properties:
+      BackupVaultName: appmod-fixture-vault
+      LockConfiguration:
+        MinRetentionDays: 365
+        MaxRetentionDays: 1095

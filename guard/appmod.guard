@@ -1,0 +1,121 @@
+#
+# cfn-guard rules for the app-modernization Spoke templates (base.yaml, stage3-serverless.yaml).
+#
+# Each rule rejects a template that would enable an irreversible feature or drift from the fixed
+# minimum configuration. Every rule has exactly one failing fixture under guard/tests/, and
+# `make test` proves each fixture fails validation. cfn-guard evaluates every top-level named rule,
+# so a template that lacks a resource type simply passes the rules that select on it.
+#
+# Snapshot locking (ONTAP Tamperproof Snapshot) has no AWS API parameter and so cannot be caught
+# here; it is held by scripts/guard_irreversible_ops.py (the PreToolUse hook) and the pre-deletion
+# check-no-locking.sh, not by cfn-guard. These rules cover only what reaches a template.
+#
+
+let fsx_volumes = Resources.*[ Type == 'AWS::FSx::Volume' ]
+let fsx_filesystems = Resources.*[ Type == 'AWS::FSx::FileSystem' ]
+let appdata_volumes = Resources.*[
+  Type == 'AWS::FSx::Volume'
+  Properties.OntapConfiguration.JunctionPath == '/appdata'
+]
+let s3_buckets = Resources.*[ Type == 'AWS::S3::Bucket' ]
+let backup_vaults = Resources.*[ Type == 'AWS::Backup::BackupVault' ]
+
+#
+# no_snaplock: an FSx volume must not carry a SnaplockConfiguration. SnapLock makes data
+# undeletable for the retention period, and a SnapLock audit-log volume can lock the whole file
+# system (Hub incident). R7.1.
+#
+rule no_snaplock when %fsx_volumes !empty {
+  %fsx_volumes {
+    Properties.OntapConfiguration.SnaplockConfiguration not exists
+    <<FSx volume must not define SnaplockConfiguration (R7.1): SnapLock is irreversible.>>
+  }
+}
+
+#
+# snapshot_policy_none: the OntapConfiguration.SnapshotPolicy must be present and equal to 'none'.
+# A policy other than none can attach a retention-bearing (locking) schedule. R7.2.
+#
+rule snapshot_policy_none when %fsx_volumes !empty {
+  %fsx_volumes {
+    Properties.OntapConfiguration.SnapshotPolicy exists
+    <<FSx volume must set SnapshotPolicy (R7.2); it must be 'none'.>>
+    Properties.OntapConfiguration.SnapshotPolicy == 'none'
+    <<FSx volume SnapshotPolicy must be 'none' (R7.2).>>
+  }
+}
+
+#
+# no_object_lock: an S3 bucket must not enable Object Lock. Object Lock is WORM and irreversible.
+# R7.3.
+#
+rule no_object_lock when %s3_buckets !empty {
+  %s3_buckets {
+    Properties.ObjectLockEnabled not exists
+    <<S3 bucket must not set ObjectLockEnabled (R7.3).>>
+    Properties.ObjectLockConfiguration not exists
+    <<S3 bucket must not set ObjectLockConfiguration (R7.3).>>
+  }
+}
+
+#
+# no_backup_vault_lock: an AWS Backup vault must not carry a LockConfiguration (Vault Lock is
+# irreversible in compliance mode). R7.3.
+#
+rule no_backup_vault_lock when %backup_vaults !empty {
+  %backup_vaults {
+    Properties.LockConfiguration not exists
+    <<AWS Backup vault must not set LockConfiguration (R7.3).>>
+  }
+}
+
+#
+# minimum_fsx: the file system is pinned to the fixed minimum. DeploymentType SINGLE_AZ_1,
+# StorageCapacity 1024, ThroughputCapacity 128, none of them a parameter. R8.2.
+#
+rule minimum_fsx when %fsx_filesystems !empty {
+  %fsx_filesystems {
+    Properties.OntapConfiguration.DeploymentType == 'SINGLE_AZ_1'
+    <<DeploymentType must be the fixed SINGLE_AZ_1 (R8.2).>>
+    Properties.StorageCapacity == 1024
+    <<StorageCapacity must be the fixed 1024 GiB (R8.2).>>
+    Properties.OntapConfiguration.ThroughputCapacity == 128
+    <<ThroughputCapacity must be the fixed 128 MBps (R8.2).>>
+  }
+}
+
+#
+# ntfs_volume: the appdata volume must keep NTFS security style while a Windows client remains.
+# R1.2 / R2.3 / R3.3.
+#
+rule ntfs_volume when %appdata_volumes !empty {
+  %appdata_volumes {
+    Properties.OntapConfiguration.SecurityStyle == 'NTFS'
+    <<The appdata volume SecurityStyle must be NTFS (R1.2).>>
+  }
+}
+
+#
+# volume_retained: the appdata volume must set DeletionPolicy and UpdateReplacePolicy to Retain, so
+# CloudFormation never deletes or replaces the data on its own judgement. Failure mode 2.
+#
+rule volume_retained when %appdata_volumes !empty {
+  %appdata_volumes {
+    DeletionPolicy == 'Retain'
+    <<The appdata volume must set DeletionPolicy: Retain.>>
+    UpdateReplacePolicy == 'Retain'
+    <<The appdata volume must set UpdateReplacePolicy: Retain.>>
+  }
+}
+
+#
+# region_pinned: the template must carry a Rules assertion that pins AWS::Region to ap-northeast-1
+# with Fn::Equals. Applies to base.yaml and stage3-serverless.yaml. One of three region pins
+# (template Rules, this rule, deploy.sh). R8.1.
+#
+rule region_pinned {
+  Rules exists
+  <<Template must define a Rules block pinning the region (R8.1).>>
+  some Rules.*.Assertions[*].Assert.'Fn::Equals' == [{"Ref": "AWS::Region"}, "ap-northeast-1"]
+  <<A Rules assertion must Fn::Equals AWS::Region to ap-northeast-1 (R8.1).>>
+}

@@ -1,0 +1,16 @@
+# gitleaks config used ONLY by run-atx.sh to scan the directory sent to AWS Transform custom.
+#
+# This deliberately differs from the repository .gitleaks.toml: it extends the default rules and
+# adds nothing to the allowlist. In particular it does NOT allow-list .private/, because the thing
+# being scanned (.private/aimf/DocIntake/) lives under .private/, and the repo config would hide any
+# finding there. A send must fail on a key placed anywhere in the sent tree.
+#
+# setup-workspace.sh step 6 proves this config fails on a planted fake key before any real send.
+
+title = "appmod send-scan (no .private allowlist)"
+
+[extend]
+useDefault = true
+
+# No [[rules]] overrides and, importantly, no [allowlist] paths. The absence of an allowlist is the
+# point of this file.

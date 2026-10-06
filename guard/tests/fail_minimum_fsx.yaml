@@ -1,0 +1,21 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# Fixture: fails cfn-guard rule minimum_fsx only. The file system drifts from the fixed minimum
+# (DeploymentType SINGLE_AZ_2 and a larger throughput), which cfn-guard must reject.
+Description: Fixture that must fail the minimum_fsx rule.
+Rules:
+  RegionPinned:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', ap-northeast-1]
+        AssertDescription: Region pin.
+Resources:
+  FileSystem:
+    Type: AWS::FSx::FileSystem
+    Properties:
+      FileSystemType: ONTAP
+      StorageType: SSD
+      StorageCapacity: 2048
+      SubnetIds:
+        - subnet-0123456789abcdef0
+      OntapConfiguration:
+        DeploymentType: SINGLE_AZ_2
+        ThroughputCapacity: 1536

@@ -1,0 +1,10 @@
+{
+  "fsx_ssd_gb_month": 0.150,
+  "fsx_throughput_mbps_month": 0.906,
+  "ad_standard_dc_hour": 0.073,
+  "ec2_t3_large_hour": 0.1364,
+  "ec2_t3_medium_hour": 0.0544,
+  "ebs_gp3_gb_month": 0.096,
+  "vpce_interface_az_hour": 0.014,
+  "secrets_manager_secret_month": 0.40
+}

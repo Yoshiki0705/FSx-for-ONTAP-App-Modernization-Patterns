@@ -1,0 +1,221 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+# Stage-3 add-on stack: run part of the Worker from AWS Lambda through an FSx for ONTAP S3 Access
+# Point attached to the same appdata volume. It references only the base stack's exports
+# (Fn::ImportValue) and never the reverse, so deleting this stack does not affect appmod-base.
+#
+# The Lambda code and the migrated .NET package are decided later (tasks 5.1 / 5.2); here the
+# handler name and the package S3 key are parameters. The region is pinned in the Rules block, which
+# the cfn-guard region_pinned rule verifies on this template too.
+#
+# S3 Access Points have no S3 event notification, so the Worker is triggered by an EventBridge
+# Scheduler poll rather than by object events (Hub domain-knowledge). NetworkOrigin is VPC and the
+# file-system identity is a WINDOWS-type AD user; NetworkOrigin cannot be changed after creation, so
+# a change is a re-create, which needs a fresh stage3 estimate and approval.
+
+Description: >-
+  Stage-3 add-on for the FSx for ONTAP application-modernization Spoke: an AWS Lambda Worker reached
+  through an FSx for ONTAP S3 Access Point attached to the appdata volume, triggered on a schedule
+  by Amazon EventBridge Scheduler. References the base stack's exports only. No Object Lock, no
+  WORM. Lambda code and package key are supplied as parameters, decided in a later task.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Base stack
+        Parameters:
+          - BaseStackName
+          - PrimarySubnetId
+          - LambdaSecurityGroupId
+      - Label:
+          default: Lambda package
+        Parameters:
+          - ArtifactsBucketName
+          - LambdaPackageKey
+          - LambdaHandler
+          - LambdaRuntime
+      - Label:
+          default: S3 Access Point
+        Parameters:
+          - FileSystemIdentityUser
+
+Parameters:
+  BaseStackName:
+    Type: String
+    Default: appmod-base
+    Description: Name of the base stack whose exports (file system, volume) this stack imports.
+
+  PrimarySubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Primary subnet for the VPC-attached Lambda ENIs (same subnet as the file system).
+
+  LambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for the Lambda ENIs; must reach the S3 gateway endpoint and the SVM.
+
+  ArtifactsBucketName:
+    Type: String
+    Default: ''
+    Description: >-
+      S3 bucket holding the Lambda deployment package. Defaults to the base stack's artifacts bucket
+      via Fn::ImportValue when left empty.
+
+  LambdaPackageKey:
+    Type: String
+    Default: lambda/worker.zip
+    Description: S3 key of the Lambda deployment package built in task 5.2.
+
+  LambdaHandler:
+    Type: String
+    Default: Worker::Worker.Function::Handler
+    Description: Lambda handler, decided in task 5.1 once the migrated runtime is fixed.
+
+  LambdaRuntime:
+    Type: String
+    Default: provided.al2023
+    AllowedValues: [provided.al2023, dotnet8]
+    Description: >-
+      Lambda runtime. provided.al2023 carries a self-contained publish; a managed .NET runtime is
+      used instead if the migrated version has one (confirmed in task 5.1).
+
+  FileSystemIdentityUser:
+    Type: String
+    Default: APPMOD\appsvc
+    Description: The WINDOWS-type AD user the S3 Access Point maps the Lambda caller to.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: The VPC the S3 Access Point restricts requests to (NetworkOrigin VPC; immutable).
+
+Conditions:
+  UseImportedBucket: !Equals [!Ref ArtifactsBucketName, '']
+
+Rules:
+  RegionPinned:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', ap-northeast-1]
+        AssertDescription: This stack is validated only in ap-northeast-1 (R8.1).
+
+Resources:
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-worker'
+      RetentionInDays: 7
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: worker-s3-access-point
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # The S3 Access Point grants are scoped to the attachment created below; the Worker
+              # reads and writes objects through the access point alias, not the bucket directly.
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource: '*'
+
+  WorkerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-worker'
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Handler: !Ref LambdaHandler
+      Runtime: !Ref LambdaRuntime
+      Timeout: 120
+      MemorySize: 512
+      Code:
+        S3Bucket: !If
+          - UseImportedBucket
+          - !ImportValue
+            'Fn::Sub': '${BaseStackName}-ArtifactsBucket'
+          - !Ref ArtifactsBucketName
+        S3Key: !Ref LambdaPackageKey
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrimarySubnetId
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
+      Environment:
+        Variables:
+          STORE: s3
+          FS_IDENTITY: !Ref FileSystemIdentityUser
+    DependsOn: LambdaLogGroup
+
+  # Poll the inbox on a schedule, because the S3 Access Point emits no S3 event notification.
+  WorkerSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub '${AWS::StackName}-worker-poll'
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      ScheduleExpression: 'rate(5 minutes)'
+      State: ENABLED
+      Target:
+        Arn: !GetAtt WorkerFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-worker
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt WorkerFunction.Arn
+
+  # Attach an S3 Access Point to the appdata volume. The attachment has create / list / detach only
+  # (no update), so changing a value is a re-create (Hub-documented). NetworkOrigin VPC is immutable
+  # after creation.
+  AppDataS3AccessPoint:
+    Type: AWS::FSx::S3AccessPointAttachment
+    Properties:
+      # Name is also the access point name: 3-50 chars, lower-case, digits and hyphens.
+      Name: !Sub '${AWS::StackName}-appdata-ap'
+      Type: ONTAP
+      OntapConfiguration:
+        VolumeId: !ImportValue
+          'Fn::Sub': '${BaseStackName}-AppDataVolumeId'
+        FileSystemIdentity:
+          # WINDOWS identity: the AD user the design maps the caller to. NetworkOrigin is VPC and is
+          # immutable, so a change here is a re-create (fresh stage3 estimate + approval).
+          Type: WINDOWS
+          WindowsUser:
+            Name: !Ref FileSystemIdentityUser
+      S3AccessPoint:
+        VpcConfiguration:
+          VpcId: !Ref VpcId
+
+Outputs:
+  WorkerFunctionArn:
+    Description: The stage-3 Worker Lambda function ARN.
+    Value: !GetAtt WorkerFunction.Arn
+
+  ScheduleName:
+    Description: The EventBridge Scheduler schedule that polls the inbox.
+    Value: !Ref WorkerSchedule

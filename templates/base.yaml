@@ -1,0 +1,1026 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+# Stage-0 base stack for the application-modernization Spoke. It builds the one environment that
+# stages 0 through 3 reuse without rebuilding: an Amazon FSx for NetApp ONTAP (hereafter
+# "FSx for ONTAP") first-generation Single-AZ file system, an AWS Managed Microsoft AD directory,
+# one AD-joined SVM, one NTFS-security-style volume ("appdata"), a Windows client and a Linux
+# client, and the artifacts bucket. Everything that only the ONTAP REST API can set (the SMB share,
+# export policy rules, NTFS ACEs, name mappings, FlexClones) is done by the scripts under
+# scripts/ontap/, not here, because the FSx for ONTAP API has no action for any of them.
+#
+# Derived read-only from the Hub example examples/multiprotocol-ad/fsxontap-multiprotocol-ad.yaml
+# (AD, SVM, domain-join, security-group and client-bootstrap shapes), reduced to a single SVM and a
+# single NTFS volume per the design's fixed-value table.
+#
+# Fixed values that MUST NOT become parameters (held by cfn-guard appmod.guard): DeploymentType
+# SINGLE_AZ_1, StorageCapacity 1024 GiB, ThroughputCapacity 128 MBps, the appdata volume's NTFS
+# SecurityStyle, SnapshotPolicy none, and DeletionPolicy + UpdateReplacePolicy Retain on appdata.
+# The Rules block pins the region to ap-northeast-1 (one of the three places that pin lives; the
+# others are the cfn-guard rule and deploy.sh).
+
+Description: >-
+  Stage-0 base environment for the FSx for ONTAP application-modernization Spoke. A
+  first-generation Single-AZ FSx for ONTAP file system (1,024 GiB, 128 MBps), an AWS Managed
+  Microsoft AD directory, one AD-joined SVM, one NTFS-security-style volume reused across stages 0
+  to 3, a Windows client, a Linux client that is also the ONTAP REST execution host, and an
+  artifacts bucket without Object Lock. SnapLock and snapshot locking are NOT used. The SMB share,
+  export policy rules, NTFS ACEs and name mappings are set by the ONTAP REST scripts, not here.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Network
+        Parameters:
+          - VpcId
+          - PrimarySubnetId
+          - SecondAzSubnetId
+          - EgressMode
+          - CreateS3GatewayEndpoint
+          - RouteTableIds
+      - Label:
+          default: Active Directory
+        Parameters:
+          - DomainName
+          - DomainShortName
+          - AdAdminSecretName
+          - OrganizationalUnitDistinguishedName
+      - Label:
+          default: File system
+        Parameters:
+          - FsxAdminSecretName
+          - SvmNetBiosName
+      - Label:
+          default: Clients
+        Parameters:
+          - WindowsInstanceType
+          - LinuxInstanceType
+          - WindowsAmiId
+          - LinuxAmiId
+      - Label:
+          default: Naming
+        Parameters:
+          - NamePrefix
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: appmod
+    AllowedPattern: '^[a-z][a-z0-9-]{2,20}$'
+    Description: >-
+      Lower-case prefix for resource names and the artifacts bucket. The SVM and volume names derive
+      from it with hyphens removed, because ONTAP accepts only alphanumerics and underscores there.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: >-
+      Existing VPC. This template creates no VPC, subnet, route table or NAT gateway. Run
+      scripts/preflight.sh --phase network against it first to choose EgressMode and
+      CreateS3GatewayEndpoint.
+
+  PrimarySubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: >-
+      Subnet for the file system, both clients and (in stage 3) the Lambda ENIs. Single-AZ places
+      the SMB and NFS endpoints here.
+
+  SecondAzSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: >-
+      A second subnet in a DIFFERENT Availability Zone, used only by AWS Managed Microsoft AD, which
+      always deploys two domain controllers across two AZs. The file system stays Single-AZ.
+
+  EgressMode:
+    Type: String
+    Default: endpoints
+    AllowedValues: [nat, endpoints]
+    Description: >-
+      endpoints: create interface VPC endpoints for Directory Service, FSx for ONTAP, Systems Manager
+      (ssm, ssmmessages, ec2messages) and Secrets Manager in the primary subnet. nat: create none,
+      for a VPC that already has a NAT gateway or those endpoints. preflight.sh recommends a value.
+
+  CreateS3GatewayEndpoint:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Create an S3 gateway endpoint so that a VPC-origin FSx for ONTAP S3 Access Point (stage 3) is
+      reached as VPC traffic. Created regardless of EgressMode. Set false only when the VPC already
+      has an S3 gateway endpoint on the primary subnet's route tables; preflight.sh detects that.
+
+  RouteTableIds:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: >-
+      Route table IDs to attach the S3 gateway endpoint to. Required when CreateS3GatewayEndpoint is
+      true. preflight.sh prints the route tables associated with the primary subnet.
+
+  DomainName:
+    Type: String
+    Default: appmod.example.com
+    AllowedPattern: '^([a-zA-Z0-9]+[\.-])+([a-zA-Z0-9])+$'
+    Description: >-
+      Fully qualified domain name for the directory. Resolves inside the VPC only; it does not need
+      to be publicly resolvable.
+
+  DomainShortName:
+    Type: String
+    Default: APPMOD
+    AllowedPattern: '^[A-Za-z0-9]{1,15}$'
+    Description: NetBIOS name of the domain. The SVM NetBIOS name below must differ from this value.
+
+  AdAdminSecretName:
+    Type: String
+    Default: appmod/ad-admin
+    MinLength: 1
+    Description: >-
+      Name or ARN of an existing Secrets Manager secret with a JSON "password" key, for the
+      directory's Admin user and reused as the service account that joins the SVM. Created by
+      scripts/create-secrets.sh before this stack. Directory Service requires 8 to 64 characters
+      with three of the four character classes.
+
+  OrganizationalUnitDistinguishedName:
+    Type: String
+    Default: OU=Computers,OU=APPMOD,DC=appmod,DC=example,DC=com
+    MinLength: 1
+    Description: >-
+      Distinguished name of the OU that holds the SVM computer object. For AWS Managed Microsoft AD
+      this MUST include the intermediate OU that AWS inserts:
+      OU=Computers,OU=<DomainShortName>,DC=<label>,DC=<label>. Omitting it does not fail validation;
+      the join fails afterwards and the SVM settles in MISCONFIGURED. (Hub domain-knowledge: the
+      intermediate OU is the usual cause of a MISCONFIGURED SVM.)
+
+  FsxAdminSecretName:
+    Type: String
+    Default: appmod/fsxadmin
+    MinLength: 1
+    Description: >-
+      Name or ARN of an existing Secrets Manager secret with a JSON "password" key for the ONTAP
+      fsxadmin account. Resolved at create time, so the password appears in no parameter value,
+      output or log. FSx for ONTAP accepts 8 to 50 characters.
+
+  SvmNetBiosName:
+    Type: String
+    Default: APPMODSVM01
+    AllowedPattern: '^[A-Za-z0-9]{1,15}$'
+    Description: >-
+      NetBIOS name of the SVM. 15 alphanumerics or fewer, different from DomainShortName, unique in
+      the domain. On a join failure, change this (and never reuse a failed name) only before the b0
+      boundary record is taken; after that, rebuild the environment per the design.
+
+  WindowsInstanceType:
+    Type: String
+    Default: t3.large
+    Description: Windows client that runs the .NET Framework 4.8 source app and sets NTFS ACEs over SMB.
+
+  LinuxInstanceType:
+    Type: String
+    Default: t3.medium
+    Description: >-
+      Linux client. The ONTAP REST execution host, the second SMB client for the two-client probes,
+      and (stage 2) the host for the migrated app. Chosen for cost; do not measure throughput on it.
+
+  WindowsAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base
+    Description: Resolved from the AWS-published SSM public parameter so no AMI ID is pinned here.
+
+  LinuxAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Resolved from the AWS-published SSM public parameter so no AMI ID is pinned here.
+
+# The region is pinned in three independent places (template Rules here, the cfn-guard
+# region_pinned rule, and deploy.sh). Rules fail the create/update call itself, before any resource
+# is touched, when the stack is launched outside ap-northeast-1.
+Rules:
+  RegionPinned:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', ap-northeast-1]
+        AssertDescription: This stack is validated only in ap-northeast-1 (R8.1).
+
+Conditions:
+  MakeClientEndpoints: !Equals [!Ref EgressMode, endpoints]
+  MakeS3GatewayEndpoint: !Equals [!Ref CreateS3GatewayEndpoint, 'true']
+  FsxSecretGivenAsArn: !Equals [!Select [0, !Split [':', !Ref FsxAdminSecretName]], 'arn']
+  AdSecretGivenAsArn: !Equals [!Select [0, !Split [':', !Ref AdAdminSecretName]], 'arn']
+
+Resources:
+
+  # ------------------------------------------------------------------ directory
+
+  Directory:
+    Type: AWS::DirectoryService::MicrosoftAD
+    Properties:
+      Name: !Ref DomainName
+      ShortName: !Ref DomainShortName
+      # Standard is the cheaper edition and is sufficient here. Edition cannot be changed without
+      # replacing the directory, and R7.4 forbids promoting Standard to Enterprise.
+      Edition: Standard
+      Password: !Sub '{{resolve:secretsmanager:${AdAdminSecretName}:SecretString:password}}'
+      VpcSettings:
+        VpcId: !Ref VpcId
+        SubnetIds:
+          - !Ref PrimarySubnetId
+          - !Ref SecondAzSubnetId
+
+  # ------------------------------------------------------------------ security groups
+
+  ClientSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Windows and Linux clients for the app-modernization base stack. No inbound rules.
+      VpcId: !Ref VpcId
+      # Egress enumerated by port rather than left as all-protocols. The destination CIDR stays
+      # 0.0.0.0/0 on rules that leave the VPC because a template cannot portably discover the VPC
+      # CIDR or the S3 prefix list; narrow those to the VPC CIDR and the S3 prefix list in a
+      # production copy. This is a verification environment, not a production reference.
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: >-
+            HTTPS. Systems Manager, Secrets Manager, Directory Service, FSx for ONTAP interface
+            endpoints, the S3 gateway endpoint, and the ONTAP REST endpoint. NARROW in production.
+        - IpProtocol: tcp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: DNS over TCP to the domain controllers. NARROW TO THE VPC CIDR in production
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: DNS to the domain controllers. NARROW TO THE VPC CIDR in production
+        - IpProtocol: tcp
+          FromPort: 88
+          ToPort: 88
+          CidrIp: 0.0.0.0/0
+          Description: Kerberos. NARROW TO THE VPC CIDR in production
+        - IpProtocol: udp
+          FromPort: 88
+          ToPort: 88
+          CidrIp: 0.0.0.0/0
+          Description: Kerberos. NARROW TO THE VPC CIDR in production
+        - IpProtocol: udp
+          FromPort: 123
+          ToPort: 123
+          CidrIp: 0.0.0.0/0
+          Description: NTP. Kerberos fails on clock skew, so this is not optional. NARROW in production
+        - IpProtocol: tcp
+          FromPort: 135
+          ToPort: 135
+          CidrIp: 0.0.0.0/0
+          Description: RPC endpoint mapper for the Windows administration tools. NARROW in production
+        - IpProtocol: tcp
+          FromPort: 389
+          ToPort: 389
+          CidrIp: 0.0.0.0/0
+          Description: LDAP. NARROW TO THE VPC CIDR in production
+        - IpProtocol: udp
+          FromPort: 389
+          ToPort: 389
+          CidrIp: 0.0.0.0/0
+          Description: LDAP ping / CLDAP. NARROW TO THE VPC CIDR in production
+        - IpProtocol: tcp
+          FromPort: 445
+          ToPort: 445
+          CidrIp: 0.0.0.0/0
+          Description: SMB to the domain controllers, for the join and group policy. NARROW in production
+        - IpProtocol: tcp
+          FromPort: 464
+          ToPort: 464
+          CidrIp: 0.0.0.0/0
+          Description: Kerberos password change. NARROW TO THE VPC CIDR in production
+        - IpProtocol: udp
+          FromPort: 464
+          ToPort: 464
+          CidrIp: 0.0.0.0/0
+          Description: Kerberos password change. NARROW TO THE VPC CIDR in production
+        - IpProtocol: tcp
+          FromPort: 636
+          ToPort: 636
+          CidrIp: 0.0.0.0/0
+          Description: LDAPS. NARROW TO THE VPC CIDR in production
+        - IpProtocol: tcp
+          FromPort: 3268
+          ToPort: 3269
+          CidrIp: 0.0.0.0/0
+          Description: Global catalog. NARROW TO THE VPC CIDR in production
+        - IpProtocol: tcp
+          FromPort: 49152
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+          Description: Dynamic RPC range for the Windows administration tools. NARROW in production
+        # NFS and SMB to the file system reference the file system's group, the one place the
+        # destination can be named exactly.
+        - IpProtocol: tcp
+          FromPort: 111
+          ToPort: 111
+          DestinationSecurityGroupId: !Ref FileSystemSecurityGroup
+          Description: rpcbind
+        - IpProtocol: udp
+          FromPort: 111
+          ToPort: 111
+          DestinationSecurityGroupId: !Ref FileSystemSecurityGroup
+          Description: rpcbind
+        - IpProtocol: tcp
+          FromPort: 635
+          ToPort: 635
+          DestinationSecurityGroupId: !Ref FileSystemSecurityGroup
+          Description: NFS mount
+        - IpProtocol: udp
+          FromPort: 635
+          ToPort: 635
+          DestinationSecurityGroupId: !Ref FileSystemSecurityGroup
+          Description: NFS mount
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          DestinationSecurityGroupId: !Ref FileSystemSecurityGroup
+          Description: NFS
+        - IpProtocol: udp
+          FromPort: 2049
+          ToPort: 2049
+          DestinationSecurityGroupId: !Ref FileSystemSecurityGroup
+          Description: NFS
+        - IpProtocol: tcp
+          FromPort: 4045
+          ToPort: 4046
+          DestinationSecurityGroupId: !Ref FileSystemSecurityGroup
+          Description: NFS lock manager
+        - IpProtocol: udp
+          FromPort: 4045
+          ToPort: 4046
+          DestinationSecurityGroupId: !Ref FileSystemSecurityGroup
+          Description: NFS lock manager
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-clients'
+        - Key: appmod
+          Value: base
+
+  FileSystemSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: FSx for ONTAP file system for the app-modernization base stack.
+      VpcId: !Ref VpcId
+      # The SVM reaches the domain controllers for the join and, afterwards, for SMB authentication
+      # and AD identity resolution. Enumerated for the same reason as the client group.
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: DNS over TCP to the domain controllers. NARROW TO THE VPC CIDR in production
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+          Description: DNS to the domain controllers. NARROW TO THE VPC CIDR in production
+        - IpProtocol: tcp
+          FromPort: 88
+          ToPort: 88
+          CidrIp: 0.0.0.0/0
+          Description: Kerberos. NARROW TO THE VPC CIDR in production
+        - IpProtocol: udp
+          FromPort: 88
+          ToPort: 88
+          CidrIp: 0.0.0.0/0
+          Description: Kerberos. NARROW TO THE VPC CIDR in production
+        - IpProtocol: udp
+          FromPort: 123
+          ToPort: 123
+          CidrIp: 0.0.0.0/0
+          Description: NTP. Kerberos fails on clock skew. NARROW TO THE VPC CIDR in production
+        - IpProtocol: tcp
+          FromPort: 389
+          ToPort: 389
+          CidrIp: 0.0.0.0/0
+          Description: LDAP. NARROW TO THE VPC CIDR in production
+        - IpProtocol: udp
+          FromPort: 389
+          ToPort: 389
+          CidrIp: 0.0.0.0/0
+          Description: LDAP ping / CLDAP. NARROW TO THE VPC CIDR in production
+        - IpProtocol: tcp
+          FromPort: 445
+          ToPort: 445
+          CidrIp: 0.0.0.0/0
+          Description: SMB to the domain controllers. NARROW TO THE VPC CIDR in production
+        - IpProtocol: tcp
+          FromPort: 464
+          ToPort: 464
+          CidrIp: 0.0.0.0/0
+          Description: Kerberos password change. NARROW TO THE VPC CIDR in production
+        - IpProtocol: udp
+          FromPort: 464
+          ToPort: 464
+          CidrIp: 0.0.0.0/0
+          Description: Kerberos password change. NARROW TO THE VPC CIDR in production
+        - IpProtocol: tcp
+          FromPort: 636
+          ToPort: 636
+          CidrIp: 0.0.0.0/0
+          Description: LDAPS. NARROW TO THE VPC CIDR in production
+        - IpProtocol: tcp
+          FromPort: 3268
+          ToPort: 3269
+          CidrIp: 0.0.0.0/0
+          Description: Global catalog. NARROW TO THE VPC CIDR in production
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-fs'
+        - Key: appmod
+          Value: base
+
+  # Client-reached AWS endpoints (EgressMode endpoints only). One security group serves them all:
+  # same instances, same port, same reason.
+  ClientEndpointSecurityGroup:
+    Condition: MakeClientEndpoints
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Interface endpoints for the app-modernization base stack.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ClientSecurityGroup
+          Description: HTTPS from the clients calling the ds, fsx, ssm and secretsmanager APIs
+      # Inert: an interface-endpoint ENI answers requests and does not originate connections, so no
+      # egress rule is evaluated. Written out so the template is not more restrictive than reality.
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Inert; an endpoint interface does not originate connections
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-client-endpoints'
+        - Key: appmod
+          Value: base
+
+  DirectoryServiceEndpoint:
+    Condition: MakeClientEndpoints
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ds'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrimarySubnetId
+      SecurityGroupIds:
+        - !Ref ClientEndpointSecurityGroup
+
+  FsxApiEndpoint:
+    Condition: MakeClientEndpoints
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.fsx'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrimarySubnetId
+      SecurityGroupIds:
+        - !Ref ClientEndpointSecurityGroup
+
+  SsmEndpoint:
+    Condition: MakeClientEndpoints
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssm'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrimarySubnetId
+      SecurityGroupIds:
+        - !Ref ClientEndpointSecurityGroup
+
+  SsmMessagesEndpoint:
+    Condition: MakeClientEndpoints
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssmmessages'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrimarySubnetId
+      SecurityGroupIds:
+        - !Ref ClientEndpointSecurityGroup
+
+  Ec2MessagesEndpoint:
+    Condition: MakeClientEndpoints
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2messages'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrimarySubnetId
+      SecurityGroupIds:
+        - !Ref ClientEndpointSecurityGroup
+
+  SecretsManagerEndpoint:
+    Condition: MakeClientEndpoints
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrimarySubnetId
+      SecurityGroupIds:
+        - !Ref ClientEndpointSecurityGroup
+
+  # S3 gateway endpoint, created regardless of EgressMode (CreateS3GatewayEndpoint controls it). A
+  # NAT-routed request leaves to the public S3 endpoint and is unlikely to be treated as VPC-origin
+  # by a VPC-origin S3 Access Point in stage 3; the gateway endpoint keeps the path VPC-origin.
+  S3GatewayEndpoint:
+    Condition: MakeS3GatewayEndpoint
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds: !Ref RouteTableIds
+
+  SmbFromClients:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FileSystemSecurityGroup
+      IpProtocol: tcp
+      FromPort: 445
+      ToPort: 445
+      SourceSecurityGroupId: !Ref ClientSecurityGroup
+      Description: SMB
+
+  NfsTcpFromClients:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FileSystemSecurityGroup
+      IpProtocol: tcp
+      FromPort: 2049
+      ToPort: 2049
+      SourceSecurityGroupId: !Ref ClientSecurityGroup
+      Description: NFS
+
+  NfsUdpFromClients:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FileSystemSecurityGroup
+      IpProtocol: udp
+      FromPort: 2049
+      ToPort: 2049
+      SourceSecurityGroupId: !Ref ClientSecurityGroup
+      Description: NFS
+
+  RpcBindTcpFromClients:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FileSystemSecurityGroup
+      IpProtocol: tcp
+      FromPort: 111
+      ToPort: 111
+      SourceSecurityGroupId: !Ref ClientSecurityGroup
+      Description: RPC bind
+
+  RpcBindUdpFromClients:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FileSystemSecurityGroup
+      IpProtocol: udp
+      FromPort: 111
+      ToPort: 111
+      SourceSecurityGroupId: !Ref ClientSecurityGroup
+      Description: RPC bind
+
+  MountdTcpFromClients:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FileSystemSecurityGroup
+      IpProtocol: tcp
+      FromPort: 635
+      ToPort: 635
+      SourceSecurityGroupId: !Ref ClientSecurityGroup
+      Description: mountd
+
+  MountdUdpFromClients:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FileSystemSecurityGroup
+      IpProtocol: udp
+      FromPort: 635
+      ToPort: 635
+      SourceSecurityGroupId: !Ref ClientSecurityGroup
+      Description: mountd
+
+  LockingTcpFromClients:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FileSystemSecurityGroup
+      IpProtocol: tcp
+      FromPort: 4045
+      ToPort: 4046
+      SourceSecurityGroupId: !Ref ClientSecurityGroup
+      Description: NLM and NSM
+
+  LockingUdpFromClients:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FileSystemSecurityGroup
+      IpProtocol: udp
+      FromPort: 4045
+      ToPort: 4046
+      SourceSecurityGroupId: !Ref ClientSecurityGroup
+      Description: NLM and NSM
+
+  OntapRestFromClients:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FileSystemSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref ClientSecurityGroup
+      Description: >-
+        ONTAP REST API. The SMB share, export policy rules, name mappings and FlexClones have no
+        FSx for ONTAP API action, so the Linux client calls ONTAP REST directly.
+
+  # ------------------------------------------------------------------ IAM
+
+  WindowsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonSSMDirectoryServiceAccess
+      Policies:
+        # The Windows host reads only the AD admin secret, to create the test users with the
+        # Active Directory administration tools (no AWS API exists for that). It never holds the
+        # fsxadmin cluster credential.
+        - PolicyName: read-ad-admin-secret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !If
+                    - AdSecretGivenAsArn
+                    - !Ref AdAdminSecretName
+                    - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AdAdminSecretName}-??????'
+
+  WindowsInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref WindowsRole
+
+  LinuxRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonSSMDirectoryServiceAccess
+      Policies:
+        # The Linux host reads the fsxadmin, ad-admin, app-users and ontap-itclone secrets. During
+        # stage 2 the fsxadmin secret is made unreadable from this role by a resource policy that
+        # scripts/aimf/lock-fsxadmin.sh applies, so an SSM-reachable agent cannot reach fsxadmin and
+        # enable snapshot locking. The grant here is the standing one; the Deny is layered at
+        # runtime.
+        - PolicyName: read-base-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !If
+                    - FsxSecretGivenAsArn
+                    - !Ref FsxAdminSecretName
+                    - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${FsxAdminSecretName}-??????'
+                  - !If
+                    - AdSecretGivenAsArn
+                    - !Ref AdAdminSecretName
+                    - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AdAdminSecretName}-??????'
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}/app-users-??????'
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}/ontap-itclone-??????'
+        - PolicyName: describe-fsx
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - fsx:DescribeFileSystems
+                  - fsx:DescribeStorageVirtualMachines
+                  - fsx:DescribeVolumes
+                Resource: '*'
+        - PolicyName: artifacts-bucket-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ArtifactsBucket.Arn
+                  - !Sub '${ArtifactsBucket.Arn}/*'
+
+  LinuxInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref LinuxRole
+
+  # ------------------------------------------------------------------ artifacts bucket
+
+  # Build artifacts and probe results pass through here. No Object Lock and no versioning (the
+  # cfn-guard no_object_lock rule rejects an Object Lock configuration here). Encryption and a
+  # public-access block are on; the bucket is emptied in the teardown order before the stack is
+  # deleted.
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub '${NamePrefix}-artifacts-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: appmod
+          Value: base
+
+  # ------------------------------------------------------------------ file system
+
+  FileSystem:
+    Type: AWS::FSx::FileSystem
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      FileSystemType: ONTAP
+      StorageType: SSD
+      # Fixed by cfn-guard minimum_fsx: 1024 GiB. Not a parameter.
+      StorageCapacity: 1024
+      SubnetIds:
+        - !Ref PrimarySubnetId
+      SecurityGroupIds:
+        - !Ref FileSystemSecurityGroup
+      OntapConfiguration:
+        # Fixed by cfn-guard minimum_fsx: SINGLE_AZ_1 and 128 MBps, neither a parameter. HAPairs is
+        # unset because the first generation has exactly one pair. Deployment type cannot change
+        # after creation.
+        DeploymentType: SINGLE_AZ_1
+        ThroughputCapacity: 128
+        DiskIopsConfiguration:
+          Mode: AUTOMATIC
+        FsxAdminPassword: !Sub '{{resolve:secretsmanager:${FsxAdminSecretName}:SecretString:password}}'
+        # Backups off. A retained backup outlives the stack and keeps being billed, and the design's
+        # teardown deletes the volume with SkipFinalBackup=true.
+        AutomaticBackupRetentionDays: 0
+      Tags:
+        - Key: Name
+          Value: !Ref NamePrefix
+        - Key: appmod
+          Value: base
+
+  # ------------------------------------------------------------------ SVM
+
+  # One AD-joined SVM. The root volume is UNIX so that NFS clients can traverse the namespace in
+  # stage 1 (an NTFS-style root denies the LOOKUP that traversal needs, which reads as a child
+  # volume error; Hub measurement). The appdata volume sets NTFS explicitly, so the security style
+  # under test is a property of the volume, not of the root.
+  Svm:
+    Type: AWS::FSx::StorageVirtualMachine
+    Properties:
+      FileSystemId: !Ref FileSystem
+      Name: !Join ['', !Split ['-', !Sub '${NamePrefix}svm']]
+      RootVolumeSecurityStyle: UNIX
+      ActiveDirectoryConfiguration:
+        NetBiosName: !Ref SvmNetBiosName
+        SelfManagedActiveDirectoryConfiguration:
+          DnsIps: !GetAtt Directory.DnsIpAddresses
+          DomainName: !Ref DomainName
+          # Domain Admins is what works for the SVM join. The administrators group AWS delegates in
+          # the domain has been measured to have insufficient permissions and leaves the SVM in
+          # MISCONFIGURED (Hub domain-knowledge). Its literal name is given on the next line.
+          # 'AWS Delegated FSx Administrators'  # allow:naming (literal AD group name, not a product)
+          FileSystemAdministratorsGroup: Domain Admins
+          OrganizationalUnitDistinguishedName: !Ref OrganizationalUnitDistinguishedName
+          UserName: Admin
+          Password: !Sub '{{resolve:secretsmanager:${AdAdminSecretName}:SecretString:password}}'
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-svm'
+        - Key: appmod
+          Value: base
+
+  # ------------------------------------------------------------------ volume
+
+  # The target volume, reused unchanged across stages 0 to 3.
+  #
+  # DeletionPolicy and UpdateReplacePolicy are both Retain (held by cfn-guard volume_retained): a
+  # stack delete or a replacing update must never take the data with it on CloudFormation's own
+  # judgement. The volume is instead deleted explicitly by teardown.sh with
+  # SkipFinalBackup=true. Because of Retain, a failed create or a stack delete can stop at
+  # DELETE_FAILED on the SVM/file system while appdata remains; teardown.sh --after-failed-create
+  # handles that path.
+  AppDataVolume:
+    Type: AWS::FSx::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: appdata
+      VolumeType: ONTAP
+      OntapConfiguration:
+        StorageVirtualMachineId: !Ref Svm
+        SizeInBytes: '10737418240'
+        OntapVolumeType: RW
+        SecurityStyle: NTFS
+        StorageEfficiencyEnabled: 'true'
+        JunctionPath: /appdata
+        # Fixed by cfn-guard snapshot_policy_none. Snapshots are created manually (no retention)
+        # and never through a policy, so no retention-bearing policy can be attached by accident.
+        SnapshotPolicy: none
+        TieringPolicy:
+          Name: NONE
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-appdata'
+        - Key: appmod
+          Value: base
+
+  # ------------------------------------------------------------------ clients
+
+  WindowsClient:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref WindowsAmiId
+      InstanceType: !Ref WindowsInstanceType
+      IamInstanceProfile: !Ref WindowsInstanceProfile
+      SubnetId: !Ref PrimarySubnetId
+      SecurityGroupIds:
+        - !Ref ClientSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 50
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: |
+          <powershell>
+          # RSAT-AD-Tools pulls in the Active Directory administration tools used to create the
+          # appsvc and appreader users (no AWS API exists for that). RSAT-AD-PowerShell is used by
+          # inventory.ps1 only incidentally. MSBuild for .NET Framework 4.x ships with the AMI; U18
+          # (task 1.7) records the fallback if it does not.
+          Install-WindowsFeature -Name RSAT-AD-PowerShell,RSAT-AD-Tools
+          </powershell>
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-win'
+        - Key: appmod
+          Value: base
+
+  LinuxClient:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LinuxAmiId
+      InstanceType: !Ref LinuxInstanceType
+      IamInstanceProfile: !Ref LinuxInstanceProfile
+      SubnetId: !Ref PrimarySubnetId
+      SecurityGroupIds:
+        - !Ref ClientSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          # cifs-utils for the stage-0 second SMB client, nfs-utils and nfs4-acl-tools for stage 1,
+          # jq and curl for the ONTAP REST scripts. CREATE_COMPLETE does not mean this finished:
+          # there is no CreationPolicy. Check: command -v nfs4_getfacl && command -v jq, and read
+          # /var/log/appmod-setup.log on failure.
+          dnf install -y nfs-utils nfs4-acl-tools cifs-utils jq >/var/log/appmod-setup.log 2>&1
+          systemctl enable --now rpcbind >>/var/log/appmod-setup.log 2>&1
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-linux'
+        - Key: appmod
+          Value: base
+
+  JoinDomainAssociation:
+    Type: AWS::SSM::Association
+    Properties:
+      AssociationName: !Sub '${NamePrefix}-join-domain'
+      Name: AWS-JoinDirectoryServiceDomain
+      Targets:
+        - Key: InstanceIds
+          Values:
+            - !Ref WindowsClient
+            - !Ref LinuxClient
+      Parameters:
+        directoryId:
+          - !Ref Directory
+        directoryName:
+          - !Ref DomainName
+        dnsIpAddresses: !GetAtt Directory.DnsIpAddresses
+
+Outputs:
+  FileSystemId:
+    Description: Pass this to the scripts as --file-system-id.
+    Value: !Ref FileSystem
+    Export:
+      Name: !Sub '${AWS::StackName}-FileSystemId'
+
+  DirectoryId:
+    Description: The AWS Managed Microsoft AD directory ID.
+    Value: !Ref Directory
+    Export:
+      Name: !Sub '${AWS::StackName}-DirectoryId'
+
+  DirectoryDnsIps:
+    Description: >-
+      Domain controller addresses. An AD-joined SVM needs these reachable after the join for SMB
+      authentication and AD identity resolution.
+    Value: !Join [',', !GetAtt Directory.DnsIpAddresses]
+
+  SvmName:
+    Description: Pass this to the ONTAP scripts as --svm.
+    Value: !Join ['', !Split ['-', !Sub '${NamePrefix}svm']]
+    Export:
+      Name: !Sub '${AWS::StackName}-SvmName'
+
+  SvmNetBiosName:
+    Description: The SVM NetBIOS name; the SMB share path is \\<this>\appdata.
+    Value: !Ref SvmNetBiosName
+
+  AppDataVolumeName:
+    Description: The target volume. NTFS security style, reused across all stages.
+    Value: appdata
+
+  AppDataVolumeId:
+    Description: The target volume ID (fsvol-...). Stage 3 attaches the S3 Access Point to this.
+    Value: !Ref AppDataVolume
+    Export:
+      Name: !Sub '${AWS::StackName}-AppDataVolumeId'
+
+  ArtifactsBucketName:
+    Description: Build artifacts and probe results pass through here.
+    Value: !Ref ArtifactsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-ArtifactsBucket'
+
+  WindowsClientInstanceId:
+    Description: Connect with "aws ssm start-session --target <this>".
+    Value: !Ref WindowsClient
+    Export:
+      Name: !Sub '${AWS::StackName}-WindowsClientInstanceId'
+
+  LinuxClientInstanceId:
+    Description: Connect with "aws ssm start-session --target <this>".
+    Value: !Ref LinuxClient
+    Export:
+      Name: !Sub '${AWS::StackName}-LinuxClientInstanceId'
+
+  BeforeYouStart:
+    Description: >-
+      Check the SVM reached CREATED and not MISCONFIGURED before running anything. A join that
+      failed on the OU path or on the administrators group leaves the stack at CREATE_COMPLETE.
+    Value: >-
+      aws fsx describe-storage-virtual-machines --query
+      'StorageVirtualMachines[].[Name,Lifecycle,LifecycleTransitionReason.Message]' --output table

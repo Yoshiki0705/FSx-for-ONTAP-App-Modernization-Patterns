@@ -1,0 +1,9 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# Fixture: fails cfn-guard rule region_pinned only. It has no Rules block pinning the region, so the
+# region guard cannot be satisfied. All resource-selecting rules pass (their resources are absent).
+Description: Fixture that must fail the region_pinned rule.
+Resources:
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: appmod-artifacts-fixture-noregion

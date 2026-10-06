@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# Fixture: fails cfn-guard rule no_snaplock only. The appdata volume carries a
+# SnaplockConfiguration, which is irreversible WORM. Everything else is the passing shape.
+Description: Fixture that must fail the no_snaplock rule.
+Rules:
+  RegionPinned:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', ap-northeast-1]
+        AssertDescription: Region pin.
+Resources:
+  FileSystem:
+    Type: AWS::FSx::FileSystem
+    Properties:
+      FileSystemType: ONTAP
+      StorageType: SSD
+      StorageCapacity: 1024
+      SubnetIds:
+        - subnet-0123456789abcdef0
+      OntapConfiguration:
+        DeploymentType: SINGLE_AZ_1
+        ThroughputCapacity: 128
+  AppDataVolume:
+    Type: AWS::FSx::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: appdata
+      VolumeType: ONTAP
+      OntapConfiguration:
+        StorageVirtualMachineId: svm-0123456789abcdef0
+        SecurityStyle: NTFS
+        JunctionPath: /appdata
+        SnapshotPolicy: none
+        SnaplockConfiguration:
+          SnaplockType: ENTERPRISE

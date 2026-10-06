@@ -1,0 +1,33 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# Fixture: fails cfn-guard rule snapshot_policy_none only. The appdata volume sets a SnapshotPolicy
+# other than none, which can attach a retention-bearing schedule.
+Description: Fixture that must fail the snapshot_policy_none rule.
+Rules:
+  RegionPinned:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', ap-northeast-1]
+        AssertDescription: Region pin.
+Resources:
+  FileSystem:
+    Type: AWS::FSx::FileSystem
+    Properties:
+      FileSystemType: ONTAP
+      StorageType: SSD
+      StorageCapacity: 1024
+      SubnetIds:
+        - subnet-0123456789abcdef0
+      OntapConfiguration:
+        DeploymentType: SINGLE_AZ_1
+        ThroughputCapacity: 128
+  AppDataVolume:
+    Type: AWS::FSx::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: appdata
+      VolumeType: ONTAP
+      OntapConfiguration:
+        StorageVirtualMachineId: svm-0123456789abcdef0
+        SecurityStyle: NTFS
+        JunctionPath: /appdata
+        SnapshotPolicy: default

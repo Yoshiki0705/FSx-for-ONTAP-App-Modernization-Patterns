@@ -1,0 +1,33 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# Fixture: fails cfn-guard rule ntfs_volume only. The appdata volume uses UNIX security style while
+# the design requires NTFS for as long as a Windows client remains.
+Description: Fixture that must fail the ntfs_volume rule.
+Rules:
+  RegionPinned:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', ap-northeast-1]
+        AssertDescription: Region pin.
+Resources:
+  FileSystem:
+    Type: AWS::FSx::FileSystem
+    Properties:
+      FileSystemType: ONTAP
+      StorageType: SSD
+      StorageCapacity: 1024
+      SubnetIds:
+        - subnet-0123456789abcdef0
+      OntapConfiguration:
+        DeploymentType: SINGLE_AZ_1
+        ThroughputCapacity: 128
+  AppDataVolume:
+    Type: AWS::FSx::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: appdata
+      VolumeType: ONTAP
+      OntapConfiguration:
+        StorageVirtualMachineId: svm-0123456789abcdef0
+        SecurityStyle: UNIX
+        JunctionPath: /appdata
+        SnapshotPolicy: none

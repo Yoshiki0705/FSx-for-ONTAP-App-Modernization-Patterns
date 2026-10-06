@@ -1,0 +1,32 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# Fixture: fails cfn-guard rule volume_retained only. The appdata volume omits the Retain policies,
+# so a stack delete or a replacing update could take the data with it.
+Description: Fixture that must fail the volume_retained rule.
+Rules:
+  RegionPinned:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', ap-northeast-1]
+        AssertDescription: Region pin.
+Resources:
+  FileSystem:
+    Type: AWS::FSx::FileSystem
+    Properties:
+      FileSystemType: ONTAP
+      StorageType: SSD
+      StorageCapacity: 1024
+      SubnetIds:
+        - subnet-0123456789abcdef0
+      OntapConfiguration:
+        DeploymentType: SINGLE_AZ_1
+        ThroughputCapacity: 128
+  AppDataVolume:
+    Type: AWS::FSx::Volume
+    DeletionPolicy: Delete
+    Properties:
+      Name: appdata
+      VolumeType: ONTAP
+      OntapConfiguration:
+        StorageVirtualMachineId: svm-0123456789abcdef0
+        SecurityStyle: NTFS
+        JunctionPath: /appdata
+        SnapshotPolicy: none

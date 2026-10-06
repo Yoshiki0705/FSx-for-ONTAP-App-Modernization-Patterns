@@ -118,11 +118,30 @@ secrets: ## gitleaks で作業ツリーを走査（履歴全体は gitleaks work
 links: ## 内部リンクの解決
 	$(PYTHON) tools/check_links.py
 
+# Test directories live here so a tests/ directory not listed runs nowhere; test-coverage below
+# fails when a test file on disk is not reached by this target.
+TEST_DIRS := scripts/tests
+PY_UNITTEST := tools.test_ai_style scripts.tests.test_estimate scripts.tests.test_readonly_scripts
+
 .PHONY: test
-test: ## 検出器の unittest と不可逆操作ガードの自己テスト
-	$(PYTHON) -m unittest tools.test_ai_style
+test: ## 検出器の unittest、スクリプトの単体テスト、ガード・フック・シェルの自己テスト
+	# Static-analysis and detector self-tests
+	$(PYTHON) -m unittest $(PY_UNITTEST)
 	$(PYTHON) scripts/guard_irreversible_ops.py --selftest
 	$(PYTHON) tools/audit_public_output.py --selftest
+	# cfn-guard negative tests: each guard/tests fixture fails exactly its own rule
+	$(PYTHON) guard/tests/run_guard_negatives.py
+	# AIMF hook self-tests
+	$(PYTHON) scripts/aimf/check-hook-wiring.py --selftest
+	$(PYTHON) scripts/aimf/block_direct_atx.py --selftest
+	$(PYTHON) scripts/aimf/hook_canary.py --selftest
+	# Sample-app and probe self-tests (no .NET build here)
+	$(PYTHON) scripts/probe_peer.py --selftest
+	$(PYTHON) scripts/make-seed.py --selftest
+	# Shell dry-run tests (deploy / run-atx / block_direct_atx / check-no-locking / integration-clone)
+	bash scripts/tests/dryrun_shell_tests.sh
+	# Every test file on disk must be reached by this target
+	$(PYTHON) scripts/tests/check_test_coverage.py
 
 .PHONY: ci
 ci: lint audit links test ## CI が呼ぶ集約ターゲット
