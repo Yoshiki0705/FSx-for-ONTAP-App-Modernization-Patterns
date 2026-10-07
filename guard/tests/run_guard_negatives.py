@@ -22,7 +22,9 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 TESTS_DIR = ROOT / "guard" / "tests"
 RULES_DIR = ROOT / "guard"
 
-FAIL_LINE = re.compile(r"appmod\.guard/([a-z_]+)\s+FAIL")
+# Rule names may contain digits (s3_scoped_resource); [a-z_]+ would silently read such a FAIL line
+# as "failed nothing".
+FAIL_LINE = re.compile(r"appmod\.guard/([a-z0-9_]+)\s+FAIL")
 
 
 def failed_rules(fixture: Path) -> set[str]:

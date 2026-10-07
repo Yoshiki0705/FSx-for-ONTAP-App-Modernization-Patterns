@@ -121,14 +121,46 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              # The S3 Access Point grants are scoped to the attachment created below; the Worker
-              # reads and writes objects through the access point alias, not the bucket directly.
-              - Effect: Allow
+              # Scoped to the one access point this stack attaches to appdata. Access points take
+              # access-point-style ARNs (arn:aws:s3:<region>:<account>:accesspoint/<name>, and
+              # .../object/<key> for objects); a bucket-style ARN built from the alias does not work
+              # (FSx for ONTAP user guide: Referencing access points; Troubleshooting S3 access
+              # point issues). The ARN is the attachment's S3AccessPoint.ResourceARN attribute.
+              # ListBucket is granted on the access point ARN, object reads and writes under
+              # /object/*. The cfn-guard rule s3_scoped_resource fails if '*' returns here.
+              - Sid: AppDataAccessPointList
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt AppDataS3AccessPoint.S3AccessPoint.ResourceARN
+              - Sid: AppDataAccessPointObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub '${AppDataS3AccessPoint.S3AccessPoint.ResourceARN}/object/*'
+              # The artifacts bucket carries the probe results back (design: build artifacts and
+              # probe results pass through it in every stage). Scoped to that one bucket.
+              - Sid: ArtifactsBucket
+                Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:ListBucket
-                Resource: '*'
+                Resource:
+                  - !Sub
+                    - 'arn:${AWS::Partition}:s3:::${Bucket}'
+                    - Bucket: !If
+                        - UseImportedBucket
+                        - !ImportValue
+                          'Fn::Sub': '${BaseStackName}-ArtifactsBucket'
+                        - !Ref ArtifactsBucketName
+                  - !Sub
+                    - 'arn:${AWS::Partition}:s3:::${Bucket}/*'
+                    - Bucket: !If
+                        - UseImportedBucket
+                        - !ImportValue
+                          'Fn::Sub': '${BaseStackName}-ArtifactsBucket'
+                        - !Ref ArtifactsBucketName
 
   WorkerFunction:
     Type: AWS::Lambda::Function

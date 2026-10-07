@@ -18,6 +18,22 @@ let appdata_volumes = Resources.*[
   Properties.OntapConfiguration.JunctionPath == '/appdata'
 ]
 let s3_buckets = Resources.*[ Type == 'AWS::S3::Bucket' ]
+# Allow statements that carry an s3: action, in IAM role inline policies and in standalone IAM
+# policy resources. Roles without inline Policies are filtered out first: a role that lacks the key
+# would otherwise make the whole query unresolved and the rule would be skipped.
+let s3_role_statements = Resources.*[
+  Type == 'AWS::IAM::Role'
+  Properties.Policies exists
+].Properties.Policies[*].PolicyDocument.Statement[
+  Effect == 'Allow'
+  some Action[*] == /^s3:/
+]
+let s3_policy_statements = Resources.*[
+  Type in ['AWS::IAM::Policy', 'AWS::IAM::ManagedPolicy']
+].Properties.PolicyDocument.Statement[
+  Effect == 'Allow'
+  some Action[*] == /^s3:/
+]
 let backup_vaults = Resources.*[ Type == 'AWS::Backup::BackupVault' ]
 
 #
@@ -105,6 +121,40 @@ rule volume_retained when %appdata_volumes !empty {
     <<The appdata volume must set DeletionPolicy: Retain.>>
     UpdateReplacePolicy == 'Retain'
     <<The appdata volume must set UpdateReplacePolicy: Retain.>>
+  }
+}
+
+#
+# s3_scoped_resource: an Allow statement with an s3: action must name its resources; a literal '*'
+# is rejected. The stage-3 Lambda role once granted s3:GetObject / PutObject / ListBucket on '*'
+# (IAM audit, 2026-10-07); it is now scoped to the attached access point ARN and the artifacts
+# bucket. Only string elements are compared: an intrinsic function (Fn::Sub, Fn::GetAtt, Fn::If)
+# is a map and cannot be '*' itself.
+#
+rule s3_scoped_resource {
+  when %s3_role_statements !empty {
+    %s3_role_statements {
+      Resource exists
+      <<An Allow statement with an s3: action must name its Resource.>>
+      Resource[*] {
+        when this is_string {
+          this != '*'
+          <<An s3: Allow statement must not use Resource '*'; scope it to the access point ARN or the bucket ARN.>>
+        }
+      }
+    }
+  }
+  when %s3_policy_statements !empty {
+    %s3_policy_statements {
+      Resource exists
+      <<An Allow statement with an s3: action must name its Resource.>>
+      Resource[*] {
+        when this is_string {
+          this != '*'
+          <<An s3: Allow statement must not use Resource '*'; scope it to the access point ARN or the bucket ARN.>>
+        }
+      }
+    }
   }
 }
 
