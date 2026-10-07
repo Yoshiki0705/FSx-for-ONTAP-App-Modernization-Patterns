@@ -68,14 +68,14 @@ whether the Systems Manager traffic went through the endpoints was not checked.
 ## Creation steps and measured duration
 
 > Evidence tier: `verified` (2026-10-07, ap-northeast-1). The approval time (06:07:17 UTC) comes
-> from the approval record. The start and completion times of `appmod-base` were read during the
-> creation session; the stack events were not retained, so the sources behind this document cannot
-> confirm them again.
+> from the approval record. The creation and deletion times of `appmod-base` come from the
+> CloudFormation stack events, retrieved by stack ID after the stack was deleted (kept as a
+> private run record).
 
 1. Present an estimate and obtain approval (configuration, time, cost). Its unit prices were re-fetched from the AWS Price List API on 2026-10-07
 2. Create the four secrets (passwords generated, never in argv)
 3. Preflight the network and secrets (read-only)
-4. Create the base stack `appmod-base`. It started at 06:08 UTC and completed at 06:43 UTC, about 35 minutes (not retained). Which resources took the time was not checked, because the per-resource events were not retained
+4. Create the base stack `appmod-base`. It started at 06:09:58 UTC and completed at 06:42:39 UTC, about 33 minutes. Most of that was the directory (AWS Managed Microsoft AD) at 29.1 minutes; the file system's 15.1 minutes ran in parallel within it. The SVM (2.0 minutes) and the volume `appdata` (1.0 minute) were created after the directory completed. These are values from one creation, a guide to duration rather than a guarantee
 5. Confirm the SVM domain join by discovered domain controller (not by lifecycle alone)
 6. Confirm no locking on all volumes
 
@@ -114,7 +114,7 @@ The second run used the correct SVM name, passed steps 0 to 10, and finished wit
 - Step 1 confirmed no snapshot locking and no SnapLock on the two volumes scanned (`appdata` and the SVM root volume)
 - Steps 4 and 5 confirmed no leftover FlexClone, no `it_*` Snapshot, and an empty recovery queue
 - Step 6 deleted `appdata` with `SkipFinalBackup=true`
-- Step 7b removed the two out-of-band inline policies from the Windows role, then step 8 deleted the base stack
+- Step 7b removed the two out-of-band inline policies from the Windows role, then step 8 deleted the base stack. The stack deletion started at 17:24:53 UTC and completed at 17:40:34 UTC (about 16 minutes, from the stack events)
 - Step 9 deleted the four secrets without a recovery window
 - The API enumeration of step 10 found nothing left on its second check (file system, SVM, volumes, backups, S3 Access Points attachments, directory, tagged EC2, ENIs and endpoints, secrets). On the first check the four secrets were still listed
 
