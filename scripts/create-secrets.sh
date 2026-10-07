@@ -34,11 +34,12 @@ random_password() {
     echo "DRY-RUN-PASSWORD"
     return 0
   fi
-  # Exclude characters that would need JSON or shell escaping downstream (double quote, @, slash,
-  # backslash). The trailing \\ is a literal backslash in the format string, intentional here.
+  # Exclude characters that would need JSON or shell escaping downstream: double quote, @, slash,
+  # backslash, and the two the unquoted here-doc would expand ($ and backtick). The trailing \\ is a
+  # literal backslash in the format string, intentional here.
   local exclude
   # shellcheck disable=SC1003
-  printf -v exclude '%s\\' '"@/'
+  printf -v exclude '%s\\' '"@/$`'
   aws --region "$REGION" secretsmanager get-random-password \
     --password-length 24 \
     --require-each-included-type \
@@ -56,8 +57,21 @@ create_from_stdin() {
     echo "DRY-RUN: aws --region $REGION secretsmanager create-secret (name=$secret_name, body on stdin)"
     return 0
   fi
-  aws --region "$REGION" secretsmanager create-secret --cli-input-json file:///dev/stdin
-  echo "created: $secret_name"
+  # Read the body from stdin into a 0600 temp file and hand that to the CLI with file://. Passing
+  # file:///dev/stdin is unreliable here (the CLI can re-open /dev/stdin after the pipe is drained),
+  # and putting the body in argv would leak the secret into the process list. The temp file lives in
+  # TMPDIR, is created with a 0600 umask, and is removed immediately after the call.
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/appmod-secret.XXXXXX")"
+  chmod 600 "$tmp"
+  cat >"$tmp"
+  if aws --region "$REGION" secretsmanager create-secret --cli-input-json "file://$tmp"; then
+    rm -f "$tmp"
+    echo "created: $secret_name"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
 }
 
 json_escape() {
