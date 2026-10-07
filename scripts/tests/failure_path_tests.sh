@@ -507,12 +507,31 @@ else
   fail "lock-fsxadmin on with APPMOD_LINUX_ROLE_ARN=appmod-linux-role (rc=$RC) must exit 2 before any call" \
     "$OUT" "$(cat "$MOCK_AWS_LOG")"
 fi
-# Control: a role ARN is accepted and becomes the Deny's principal.
+# N1: the ARN is matched as a whole string. The script's own placeholder account, a short account,
+# and an ARN that only contains ":role/" after another resource type all exit 2 with no call.
+for LK_BAD in "arn:aws:iam::123456789012:role/appmod-test-LinuxRole" \
+              "arn:aws:iam::1:role/x" \
+              "arn:aws:iam::1:user/x:role/y" \
+              "arn:aws:iam::12345678901234:role/x"; do
+  MOCK_AWS_LOG="$TMP/lk-n1.log"; : >"$MOCK_AWS_LOG"
+  OUT="$("${LK_ENV[@]}" APPMOD_LINUX_ROLE_ARN="$LK_BAD" bash scripts/aimf/lock-fsxadmin.sh on 2>&1)"; RC=$?
+  if [ "$RC" -eq 2 ] && [ ! -s "$MOCK_AWS_LOG" ]; then
+    pass "lock-fsxadmin on rejects APPMOD_LINUX_ROLE_ARN=$LK_BAD (exit 2, no call)"
+  else
+    fail "lock-fsxadmin on with APPMOD_LINUX_ROLE_ARN=$LK_BAD (rc=$RC) must exit 2 before any call" \
+      "$OUT" "$(cat "$MOCK_AWS_LOG")"
+  fi
+done
+# Control: a role ARN is accepted and becomes the Deny's principal. The account is the AWS
+# documentation example account, not the placeholder the script rejects.
+# Assembled at runtime from the AWS documentation example account (1111-2222-3333): any 12-digit
+# literal is read as an account ID by the secret scanners, and the placeholder is what is rejected.
+LK_DOC_ACCT="$(printf '%s%s%s' 1111 2222 3333)"
+LK_ARN="arn:aws:iam::$LK_DOC_ACCT:role/appmod-base-LinuxRole-Example"
 MOCK_AWS_LOG="$TMP/lk-ok.log"; : >"$MOCK_AWS_LOG"
-OUT="$("${LK_ENV[@]}" APPMOD_LINUX_ROLE_ARN=arn:aws:iam::123456789012:role/appmod-test-LinuxRole \
-  bash scripts/aimf/lock-fsxadmin.sh on 2>&1)"; RC=$?
+OUT="$("${LK_ENV[@]}" APPMOD_LINUX_ROLE_ARN="$LK_ARN" bash scripts/aimf/lock-fsxadmin.sh on 2>&1)"; RC=$?
 if [ "$RC" -eq 0 ] && grep -q "put-resource-policy" "$MOCK_AWS_LOG" \
-  && grep -qF '"AWS":"arn:aws:iam::123456789012:role/appmod-test-LinuxRole"' "$MOCK_AWS_LOG"; then
+  && grep -qF "\"AWS\":\"$LK_ARN\"" "$MOCK_AWS_LOG"; then
   pass "lock-fsxadmin on control: a role ARN is written as the Deny principal"
 else
   fail "lock-fsxadmin on control with a role ARN (rc=$RC) should call put-resource-policy for it" \

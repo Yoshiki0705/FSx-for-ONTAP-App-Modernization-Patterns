@@ -9,9 +9,13 @@
 #   lock-fsxadmin.sh off    remove that resource policy
 #
 # APPMOD_LINUX_ROLE_ARN is the Linux EC2 instance role ARN (arn:aws:iam::<account>:role/<name>),
-# required for `on`. A real `on` without it, or with a value that is not an IAM role ARN, exits 2
-# before any call: a Deny written for some other principal would report the lock as on while the
-# Linux role could still read fsxadmin. Under APPMOD_DRY_RUN a placeholder ARN is used when unset.
+# required for `on`. Read it from the base stack output LinuxRoleArn:
+#   aws cloudformation describe-stacks --region ap-northeast-1 --stack-name appmod-base \
+#     --query "Stacks[0].Outputs[?OutputKey=='LinuxRoleArn'].OutputValue" --output text
+# A real `on` without it, with a value that is not a whole IAM role ARN (12-digit account), or with
+# the placeholder account 123456789012, exits 2 before any call: a Deny written for some other
+# principal would report the lock as on while the Linux role could still read fsxadmin. Under
+# APPMOD_DRY_RUN a placeholder ARN is used when unset.
 #
 # on at the start of stage 2 (task 4.1), off at the end (task 4.5). Boundary reads during stage 2
 # use the read-only ONTAP role appmod_readonly, which does not need fsxadmin.
@@ -44,9 +48,17 @@ if [ "$ACTION" = "on" ] && [ -z "$LINUX_ROLE_ARN" ]; then
   fi
 fi
 if [ "$ACTION" = "on" ] && [ -z "$DRY_RUN" ]; then
+  # A whole-string match: exactly 12 account digits, then a role path and name drawn from the IAM
+  # name character set. A glob such as [0-9]* also accepted one digit followed by anything.
+  if ! [[ "$LINUX_ROLE_ARN" =~ ^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$ ]]; then
+    echo "lock-fsxadmin: APPMOD_LINUX_ROLE_ARN is not an IAM role ARN: $LINUX_ROLE_ARN" >&2; exit 2
+  fi
+  # 123456789012 is the documentation placeholder this script itself uses under dry-run. A Deny
+  # written for it would report the lock as on while the real Linux role could still read fsxadmin.
   case "$LINUX_ROLE_ARN" in
-    arn:aws:iam::[0-9]*:role/?*) ;;
-    *) echo "lock-fsxadmin: APPMOD_LINUX_ROLE_ARN is not an IAM role ARN: $LINUX_ROLE_ARN" >&2; exit 2 ;;
+    arn:aws:iam::123456789012:*)
+      echo "lock-fsxadmin: APPMOD_LINUX_ROLE_ARN uses the placeholder account 123456789012; pass the real LinuxRoleArn stack output" >&2
+      exit 2 ;;
   esac
 fi
 

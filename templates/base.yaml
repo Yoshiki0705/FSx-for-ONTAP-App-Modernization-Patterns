@@ -1299,6 +1299,12 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-LinuxClientInstanceId'
 
+  LinuxRoleArn:
+    Description: >-
+      The Linux EC2 instance role ARN. Pass it as APPMOD_LINUX_ROLE_ARN to
+      scripts/aimf/lock-fsxadmin.sh on (task 4.1).
+    Value: !GetAtt LinuxRole.Arn
+
   BeforeYouStart:
     Description: >-
       Check the SVM reached CREATED and not MISCONFIGURED before running anything. A join that
