@@ -10,37 +10,64 @@
 # the non-SnapLock value, OR when the scanned list does not contain the target volume `appdata`
 # (an empty or wrong scan must not read as "clean"). Prints the scanned volume names either way.
 #
-# U25 (field name/value): the volume model exposes a `snaplock` object with a `type` field, and
-# SnapLock volumes have type Compliance or Enterprise. The exact string a NON-SnapLock volume
-# reports was not confirmed offline; this script treats the set {"", "non_snaplock", "none"} as
-# not-locked and anything else as locked, and must be re-verified against the ONTAP REST reference
-# for the file system's ONTAP version before this check is relied on.
+# U25 (resolved live 2026-10-07, ONTAP 9.19.1P2): `snaplock.type` is a valid field and a
+# non-SnapLock volume reports "non_snaplock". This script treats the set
+# {"", "non_snaplock", "none"} as not-locked and anything else as locked.
 #
 # Runs on the Linux EC2 host via SSM Run Command; fsxadmin (or the read-only role) is read from
 # Secrets Manager by the instance role, never passed in argv. When APPMOD_ONTAP_FIXTURE points at a
 # JSON file, that is parsed INSTEAD of calling ONTAP, so the judgement runs ONTAP-free in tests.
 #
+#   check-no-locking.sh [--file-system-id fs-... | --mgmt-ip ip] [--region ap-northeast-1]
+#
+# The management IP is resolved at runtime from describe-file-systems
+# (OntapConfiguration.Endpoints.Management.IpAddresses) when --mgmt-ip is not given. curl uses -k:
+# the endpoint is reached by IP while its certificate CN is the DNS name (live 2026-10-07).
+#
 set -euo pipefail
 
 NON_SNAPLOCK_VALUES='"" "non_snaplock" "none"'
 FIXTURE="${APPMOD_ONTAP_FIXTURE:-}"
-MGMT_IP="${APPMOD_ONTAP_MGMT_IP:-<management-ip>}"
+MGMT_IP="${APPMOD_ONTAP_MGMT_IP:-}"
+FS_ID="${APPMOD_FS_ID:-}"
+REGION="${APPMOD_REGION:-ap-northeast-1}"
 TARGET_VOLUME="appdata"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --file-system-id) FS_ID="${2:-}"; shift 2 ;;
+    --mgmt-ip) MGMT_IP="${2:-}"; shift 2 ;;
+    --region) REGION="${2:-}"; shift 2 ;;
+    *) echo "check-no-locking: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
 
 fetch_volumes() {
   if [ -n "$FIXTURE" ]; then
     cat "$FIXTURE"
     return 0
   fi
-  # Real path: read the fsxadmin password from Secrets Manager via the instance role (not shown in
-  # argv), then curl the ONTAP REST endpoint. Left as the documented call; the test path uses a
-  # fixture so no ONTAP is contacted here.
-  local pw
-  pw="$(aws --region ap-northeast-1 secretsmanager get-secret-value \
-    --secret-id appmod/fsxadmin --query SecretString --output text | python3 -c 'import json,sys;print(json.load(sys.stdin)["password"])')"
-  curl -sS -u "fsxadmin:$pw" \
+  # Real path: resolve the management IP, read the fsxadmin password from Secrets Manager via the
+  # instance role, and hand it to curl on stdin (-K -) so it never appears in argv.
+  if [ -z "$MGMT_IP" ]; then
+    if [ -z "$FS_ID" ]; then
+      echo "check-no-locking: need --file-system-id (or APPMOD_FS_ID) or --mgmt-ip" >&2
+      exit 2
+    fi
+    local ips
+    ips="$(aws --region "$REGION" fsx describe-file-systems --file-system-id "$FS_ID" \
+      --query 'FileSystems[0].OntapConfiguration.Endpoints.Management.IpAddresses' --output text)"
+    MGMT_IP="${ips%%[[:space:]]*}"
+  fi
+  local secret pw
+  secret="$(aws --region "$REGION" secretsmanager get-secret-value \
+    --secret-id appmod/fsxadmin --query SecretString --output text)"
+  pw="$(printf '%s' "$secret" | python3 -c 'import json,sys;print(json.load(sys.stdin)["password"])')"
+  secret=""
+  pw="${pw//\\/\\\\}"
+  printf 'user = "fsxadmin:%s"\n' "${pw//\"/\\\"}" | curl -sS -k -K - \
     "https://$MGMT_IP/api/storage/volumes?fields=name,uuid,snapshot_locking_enabled,snaplock.type"
-  unset pw
+  pw=""
 }
 
 # Judge a volumes response. The JSON is passed via the APPMOD_RESPONSE env var (not stdin), because

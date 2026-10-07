@@ -28,6 +28,38 @@ expect_exit() {
   fi
 }
 
+check_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if printf '%s' "$haystack" | grep -qF -- "$needle"; then
+    echo "ok: $label"
+  else
+    echo "FAIL: $label (missing: $needle)" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+check_absent() {
+  local label="$1" needle="$2" haystack="$3"
+  if printf '%s' "$haystack" | grep -qF -- "$needle"; then
+    echo "FAIL: $label (should not contain: $needle)" >&2
+    FAILURES=$((FAILURES + 1))
+  else
+    echo "ok: $label"
+  fi
+}
+# check_before <label> <first> <second> <haystack>: the first line containing <first> comes before
+# the first line containing <second>, and both are present.
+check_before() {
+  local label="$1" first="$2" second="$3" haystack="$4" a b
+  a="$(printf '%s\n' "$haystack" | grep -nF -- "$first" | head -1 | cut -d: -f1)"
+  b="$(printf '%s\n' "$haystack" | grep -nF -- "$second" | head -1 | cut -d: -f1)"
+  if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then
+    echo "ok: $label"
+  else
+    echo "FAIL: $label ('$first' at line ${a:-none}, '$second' at line ${b:-none})" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -231,11 +263,23 @@ expect_exit 3 "check-no-locking appdata absent" \
   env APPMOD_ONTAP_FIXTURE="$FIXTURES/ontap_no_appdata.json" bash scripts/ontap/check-no-locking.sh
 
 # --- integration-clone.sh: name/range validation -------------------------------------------------
-expect_exit 0 "integration-clone create --step 3" bash scripts/ontap/integration-clone.sh create --step 3
-expect_exit 2 "integration-clone reject appdata" bash scripts/ontap/integration-clone.sh create --name appdata
-expect_exit 2 "integration-clone reject appdata_it_0" bash scripts/ontap/integration-clone.sh create --name appdata_it_0
-expect_exit 2 "integration-clone reject appdata_it_100" bash scripts/ontap/integration-clone.sh delete --step 100
-expect_exit 2 "integration-clone reject other" bash scripts/ontap/integration-clone.sh create --name other
+# A management IP is passed so an exit 2 can only come from the name check, and each rejection must
+# happen before any ONTAP request is built (no curl line in the output).
+IC=(bash scripts/ontap/integration-clone.sh)
+expect_exit 0 "integration-clone create --step 3" "${IC[@]}" create --step 3 --mgmt-ip 203.0.113.5
+for bad in "create --name appdata" "create --name appdata_it_0" "delete --step 100" \
+           "delete --name appdata_it_100" "create --name other"; do
+  # shellcheck disable=SC2086  # $bad is split into its words on purpose
+  BAD_OUT="$("${IC[@]}" $bad --mgmt-ip 203.0.113.5 2>&1)"; BAD_RC=$?
+  if [ "$BAD_RC" -eq 2 ] && ! printf '%s' "$BAD_OUT" | grep -q "curl " \
+    && printf '%s' "$BAD_OUT" | grep -qE "refusing|must be appdata_it_|out of range"; then
+    echo "ok: integration-clone rejects '$bad' with exit 2 before any ONTAP call"
+  else
+    echo "FAIL: integration-clone '$bad' (rc=$BAD_RC) should exit 2 on the name check with no call" >&2
+    echo "$BAD_OUT" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+done
 
 # --- preflight / create-secrets / lock-fsxadmin / teardown: flow runs under dry-run --------------
 expect_exit 0 "preflight network new-vpc dry-run" bash scripts/preflight.sh --phase network
@@ -255,24 +299,6 @@ expect_exit 0 "teardown report-only" bash scripts/teardown.sh
 # Asserting the resolved commands appear is what stops a stub (echo-only) from passing review again.
 S0_OUT="$(APPMOD_DRY_RUN=1 bash scripts/ontap/stage0-smb.sh \
   --mgmt-ip 203.0.113.5 --svm appmodsvm --volume appdata 2>&1)"
-check_contains() {
-  local label="$1" needle="$2" haystack="$3"
-  if printf '%s' "$haystack" | grep -qF -- "$needle"; then
-    echo "ok: $label"
-  else
-    echo "FAIL: $label (missing: $needle)" >&2
-    FAILURES=$((FAILURES + 1))
-  fi
-}
-check_absent() {
-  local label="$1" needle="$2" haystack="$3"
-  if printf '%s' "$haystack" | grep -qF -- "$needle"; then
-    echo "FAIL: $label (should not contain: $needle)" >&2
-    FAILURES=$((FAILURES + 1))
-  else
-    echo "ok: $label"
-  fi
-}
 # DC discovery via the cifs/domains discovered_servers path (not active-directory alone).
 check_contains "stage0-smb asserts DC discovery via cifs/domains" \
   "/api/protocols/cifs/domains/" "$S0_OUT"
@@ -402,6 +428,208 @@ expect_exit 0 "record-boundary output feeds check-invariant.py" \
 rm -rf .private/runs/s0-rbtest
 expect_exit 2 "record-boundary without --run-id" \
   env APPMOD_DRY_RUN=1 bash scripts/ontap/record-boundary.sh --boundary b0 --mgmt-ip 203.0.113.5
+
+# --- stage1-nfs.sh: the dry-run must BUILD the UUID-keyed REST calls ------------------------------
+S1_OUT="$(APPMOD_DRY_RUN=1 bash scripts/ontap/stage1-nfs.sh --client-cidr 192.0.2.0/24 \
+  --mgmt-ip 203.0.113.5 --svm appmodsvm --volume appdata 2>&1)"
+check_contains "stage1-nfs looks up appmod_nfs by SVM UUID" \
+  "GET https://203.0.113.5/api/protocols/nfs/export-policies?svm.uuid=<svm-uuid>&name=appmod_nfs" "$S1_OUT"
+check_contains "stage1-nfs creates export policy appmod_nfs on the SVM UUID" \
+  '"name":"appmod_nfs","svm":{"uuid":"<svm-uuid>"}' "$S1_OUT"
+check_contains "stage1-nfs export rule: given CIDR, nfs4, sec=sys, superuser none" \
+  '{"clients":[{"match":"192.0.2.0/24"}],"protocols":["nfs4"],"ro_rule":["sys"],"rw_rule":["sys"],"superuser":["none"]}' "$S1_OUT"
+check_contains "stage1-nfs assigns the policy by volume UUID" \
+  'PATCH https://203.0.113.5/api/storage/volumes/<appdata-uuid>?return_timeout=120 -d '"'"'{"nas":{"export_policy":{"name":"appmod_nfs"}}}' "$S1_OUT"
+check_contains "stage1-nfs reads unix user appsvc by SVM UUID" \
+  "GET https://203.0.113.5/api/name-services/unix-users/<svm-uuid>/appsvc" "$S1_OUT"
+check_contains "stage1-nfs creates unix user appsvc uid 10001" \
+  '"svm":{"uuid":"<svm-uuid>"},"name":"appsvc","id":10001' "$S1_OUT"
+check_contains "stage1-nfs creates unix user appreader uid 10002" \
+  '"svm":{"uuid":"<svm-uuid>"},"name":"appreader","id":10002' "$S1_OUT"
+check_contains "stage1-nfs reads name mappings by SVM UUID" \
+  "GET https://203.0.113.5/api/name-services/name-mappings?svm.uuid=<svm-uuid>" "$S1_OUT"
+check_contains "stage1-nfs maps APPMOD\\appsvc -> appsvc (win_unix)" \
+  '"direction":"win_unix","index":1,"pattern":"APPMOD\\\\appsvc","replacement":"appsvc"' "$S1_OUT"
+check_contains "stage1-nfs maps appreader -> APPMOD\\appreader (unix_win)" \
+  '"direction":"unix_win","index":2,"pattern":"appreader","replacement":"APPMOD\\\\appreader"' "$S1_OUT"
+check_contains "stage1-nfs asserts the security style" \
+  "/api/storage/volumes/<appdata-uuid>?fields=nas.security_style" "$S1_OUT"
+check_absent "stage1-nfs never PATCHes a default unix user" '"default_unix_user":' "$S1_OUT"
+check_absent "stage1-nfs never PATCHes the security style" '"security_style":' "$S1_OUT"
+check_absent "stage1-nfs never prints the credential" "fsxadmin:\$ONTAP_PW" "$S1_OUT"
+expect_exit 2 "stage1-nfs without --client-cidr" \
+  env APPMOD_DRY_RUN=1 bash scripts/ontap/stage1-nfs.sh --mgmt-ip 203.0.113.5
+expect_exit 2 "stage1-nfs with a non-network CIDR" \
+  env APPMOD_DRY_RUN=1 bash scripts/ontap/stage1-nfs.sh --client-cidr 192.0.2.1/24 --mgmt-ip 203.0.113.5
+
+# --- integration-clone.sh: the dry-run must BUILD the volume-UUID-keyed REST calls ----------------
+IC_CREATE="$(APPMOD_DRY_RUN=1 bash scripts/ontap/integration-clone.sh create --step 3 --mgmt-ip 203.0.113.5 2>&1)"
+check_contains "integration-clone snapshot it_3 on appdata by volume UUID" \
+  "POST https://203.0.113.5/api/storage/volumes/<appdata-uuid>/snapshots?return_timeout=120 -d '{\"name\":\"it_3\"}'" "$IC_CREATE"
+check_contains "integration-clone FlexClone parent is the appdata UUID, junction /appdata_it_3" \
+  '"clone":{"is_flexclone":true,"parent_volume":{"uuid":"<appdata-uuid>"},"parent_snapshot":{"name":"it_3"}},"nas":{"path":"/appdata_it_3"}' "$IC_CREATE"
+check_absent "integration-clone snapshot has no expiry" "expiry_time" "$IC_CREATE"
+check_absent "integration-clone never sets snapshot locking" "snapshot_locking_enabled\":true" "$IC_CREATE"
+check_absent "integration-clone never puts the volume name in a path" "/api/storage/volumes/appdata/" "$IC_CREATE"
+IC_DELETE="$(APPMOD_DRY_RUN=1 bash scripts/ontap/integration-clone.sh delete --step 3 --mgmt-ip 203.0.113.5 2>&1)"
+check_contains "integration-clone deletes the FlexClone by its UUID, bypassing the recovery queue" \
+  "DELETE https://203.0.113.5/api/storage/volumes/<appdata_it_3-uuid>?force=true" "$IC_DELETE"
+check_contains "integration-clone purges the recovery queue" \
+  "POST https://203.0.113.5/api/private/cli/volume/recovery-queue/purge" "$IC_DELETE"
+check_contains "integration-clone deletes snapshot it_3 by volume and snapshot UUID" \
+  "DELETE https://203.0.113.5/api/storage/volumes/<appdata-uuid>/snapshots/<it_3-uuid>" "$IC_DELETE"
+check_before "integration-clone delete order: FlexClone before recovery-queue purge" \
+  "/api/storage/volumes/<appdata_it_3-uuid>?force=true" "recovery-queue/purge" "$IC_DELETE"
+check_before "integration-clone delete order: recovery-queue purge before snapshot" \
+  "recovery-queue/purge" "/snapshots/<it_3-uuid>" "$IC_DELETE"
+check_absent "integration-clone never prints a password" "appmod-itclone:\$" "$IC_DELETE"
+
+# --- teardown.sh: the dry-run --apply must BUILD the real calls in the design order ---------------
+# Short placeholder ids (not 17-char hex) so the pre-commit secret scan does not read them as real.
+TD_ARGS=(--file-system-id fs-test --linux-instance i-lnx --bucket appmod-artifacts-example
+  --windows-role appmod-test-WindowsRole --volume-id fsvol-test)
+TD_OUT="$(APPMOD_DRY_RUN=1 bash scripts/teardown.sh --apply "${TD_ARGS[@]}" 2>&1)"
+check_contains "teardown starts the Linux EC2" "ec2 start-instances --instance-ids i-lnx" "$TD_OUT"
+check_contains "teardown waits for SSM PingStatus" \
+  "ssm describe-instance-information --filters Key=InstanceIds,Values=i-lnx" "$TD_OUT"
+check_before "teardown: EC2 start precedes check-no-locking" \
+  "ec2 start-instances" "bash ./check-no-locking.sh" "$TD_OUT"
+check_before "teardown: SSM Online wait precedes check-no-locking" \
+  "ssm describe-instance-information" "bash ./check-no-locking.sh" "$TD_OUT"
+check_contains "teardown runs check-no-locking on the Linux host via Run Command" \
+  "ssm send-command --instance-ids i-lnx --document-name AWS-RunShellScript --comment appmod teardown check-no-locking.sh" "$TD_OUT"
+check_before "teardown: check-no-locking precedes the stage3 delete" \
+  "bash ./check-no-locking.sh" "delete-stack --stack-name appmod-stage3" "$TD_OUT"
+check_before "teardown: recovery-queue verify-clean precedes the appdata delete" \
+  "integration-clone.sh verify-clean" "fsx delete-volume --volume-id fsvol-test" "$TD_OUT"
+check_contains "teardown deletes appdata (the given volume id) with SkipFinalBackup=true" \
+  "fsx delete-volume --volume-id fsvol-test --ontap-configuration SkipFinalBackup=true" "$TD_OUT"
+check_before "teardown: delete-role-policy app-users secret read precedes the base stack delete" \
+  "delete-role-policy --role-name appmod-test-WindowsRole --policy-name appmod-read-app-users-secret" \
+  "delete-stack --stack-name appmod-base" "$TD_OUT"
+check_before "teardown: delete-role-policy artifacts bucket access precedes the base stack delete" \
+  "delete-role-policy --role-name appmod-test-WindowsRole --policy-name appmod-artifacts-bucket-access" \
+  "delete-stack --stack-name appmod-base" "$TD_OUT"
+check_before "teardown: bucket emptied before the base stack delete" \
+  "s3 rm s3://appmod-artifacts-example --recursive" "delete-stack --stack-name appmod-base" "$TD_OUT"
+for s in appmod/ad-admin appmod/fsxadmin appmod/app-users appmod/ontap-itclone; do
+  check_contains "teardown force-deletes $s without recovery" \
+    "delete-secret --secret-id $s --force-delete-without-recovery" "$TD_OUT"
+done
+check_contains "teardown enumerates secrets including planned deletion" \
+  "list-secrets --include-planned-deletion" "$TD_OUT"
+check_absent "teardown never hardcodes a placeholder volume id" "vol-0123456789abcdef0" "$TD_OUT"
+TD_REPORT="$(env -u APPMOD_DRY_RUN bash scripts/teardown.sh 2>&1)"
+check_contains "teardown report names the EC2 start + SSM wait step" "- 0 start the Linux EC2" "$TD_REPORT"
+check_absent "teardown report-only makes no AWS call" "DRY-RUN:" "$TD_REPORT"
+expect_exit 2 "teardown --apply without the required ids" env APPMOD_DRY_RUN=1 bash scripts/teardown.sh --apply
+TD_AFC="$(APPMOD_DRY_RUN=1 bash scripts/teardown.sh --after-failed-create --apply --file-system-id fs-test 2>&1)"
+check_contains "teardown --after-failed-create checks SnapLock via the FSx for ONTAP API" \
+  "SnaplockConfiguration" "$TD_AFC"
+check_contains "teardown --after-failed-create deletes appdata with SkipFinalBackup=true" \
+  "--ontap-configuration SkipFinalBackup=true" "$TD_AFC"
+check_absent "teardown --after-failed-create starts no instance" "start-instances" "$TD_AFC"
+# A failed check-no-locking on the host (mocked aws: ResponseCode 3) must stop with exit 3 before
+# anything is deleted. The mock answers only what this path asks; no AWS call is made.
+MOCK_BIN="$TMP/mockbin"; mkdir -p "$MOCK_BIN"
+cat >"$MOCK_BIN/aws" <<'MOCK'
+#!/bin/bash
+echo "aws $*" >>"$MOCK_AWS_LOG"
+case "$*" in
+  *"describe-instance-information"*) echo Online ;;
+  *"ssm send-command"*) echo cmd-1 ;;
+  *"get-command-invocation"*"--query Status "*) echo Failed ;;
+  *"get-command-invocation"*"ResponseCode"*) echo 3 ;;
+  *) echo "" ;;
+esac
+MOCK
+chmod +x "$MOCK_BIN/aws"
+export MOCK_AWS_LOG="$TMP/mock-aws.log"
+: >"$MOCK_AWS_LOG"
+env -u APPMOD_DRY_RUN PATH="$MOCK_BIN:$PATH" bash scripts/teardown.sh --apply "${TD_ARGS[@]}" >/dev/null 2>&1
+TD_LOCK_RC=$?
+if [ "$TD_LOCK_RC" -eq 3 ] && ! grep -qE "delete-(stack|volume|secret|role-policy)|s3 rm" "$MOCK_AWS_LOG"; then
+  echo "ok: teardown stops with exit 3 on a failed check-no-locking, before any delete"
+else
+  echo "FAIL: teardown on a failed check-no-locking (rc=$TD_LOCK_RC) should exit 3 with no delete" >&2
+  cat "$MOCK_AWS_LOG" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+# --- run-atx.sh: real mode fails closed while unverified; a failed atx does not consume the estimate
+ATX_SEND="$TMP/atx-send"; mkdir -p "$ATX_SEND" "$TMP/atx-logs"
+new_atx_estimate() {
+  local path="$EST_DIR/$1.json"
+  printf '{"target": "atx", "region": "ap-northeast-1", "created_at": "%s", "hours": 1}\n' "$CREATED" >"$path"
+  python3 - "$APPROVAL" "$path" "$APPROVED" <<'PY'
+import json,sys
+p,est,approved=sys.argv[1:4]
+d=json.load(open(p)); d.append({"target":"atx","approved_at":approved,"estimate_file":est}); json.dump(d,open(p,"w"))
+PY
+  printf '%s' "$path"
+}
+cat >"$MOCK_BIN/atx" <<'MOCK'
+#!/bin/bash
+printf '%s\n' "$*" >"$MOCK_ATX_ARGV"
+sleep 1
+printf '%s\n' '2026-01-01 00:00:00 [DEBUG]: Initializing FrontendServiceClient with config:' \
+  '{ "region": "ap-northeast-1", "regionSource": "mock-source-from-atx-log" }' >"$APPMOD_ATX_LOG_DIR/debug1.log"
+exit "${MOCK_ATX_RC:-0}"
+MOCK
+printf '#!/bin/bash\nexit 0\n' >"$MOCK_BIN/gitleaks"
+chmod +x "$MOCK_BIN/atx" "$MOCK_BIN/gitleaks"
+export MOCK_ATX_ARGV="$TMP/atx-argv"
+ATX_ENV=(env -u APPMOD_DRY_RUN PATH="$MOCK_BIN:$PATH" APPMOD_SEND_DIR="$ATX_SEND"
+  APPMOD_ATX_LOG_DIR="$TMP/atx-logs" APPMOD_RUN_LOG="$TMP/atx-run.log")
+# (1) no verification record -> exit 2, atx never invoked, estimate untouched
+EST_U="$(new_atx_estimate atx-unverified)"
+rm -f "$MOCK_ATX_ARGV"
+U_OUT="$("${ATX_ENV[@]}" APPMOD_ATX_VERIFIED_RECORD="$TMP/none.json" \
+  bash scripts/aimf/run-atx.sh --estimate "$EST_U" --approved-at "$APPROVED" 2>&1)"; U_RC=$?
+if [ "$U_RC" -eq 2 ] && printf '%s' "$U_OUT" | grep -q "unverified (U8-U11)" \
+  && [ ! -f "$MOCK_ATX_ARGV" ] && [ -f "$EST_U" ]; then
+  echo "ok: run-atx real mode fails closed (exit 2) while the invocation is unverified"
+else
+  echo "FAIL: run-atx real mode should exit 2 unverified without calling atx (rc=$U_RC)" >&2
+  echo "$U_OUT" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+# A verification record naming the exact invocation (what task 2.4 writes).
+VREC="$TMP/atx-verified.json"
+cat >"$VREC" <<'EOF'
+{"invocation": "atx custom def exec -n AWS/comprehensive-codebase-analysis -p . -x -t",
+ "transformation": "AWS/comprehensive-codebase-analysis", "region": "ap-northeast-1",
+ "atx_version": "mock", "verified_at": "2026-01-01T00:00:00Z"}
+EOF
+# (2) atx fails -> script fails, estimate NOT moved to used/
+EST_F="$(new_atx_estimate atx-fails)"
+rm -f "$MOCK_ATX_ARGV"
+"${ATX_ENV[@]}" APPMOD_ATX_VERIFIED_RECORD="$VREC" MOCK_ATX_RC=7 \
+  bash scripts/aimf/run-atx.sh --estimate "$EST_F" --approved-at "$APPROVED" >/dev/null 2>&1
+F_RC=$?
+if [ "$F_RC" -ne 0 ] && [ -f "$EST_F" ] && [ ! -f "$EST_DIR/used/atx-fails.json" ] \
+  && [ "$(cat "$MOCK_ATX_ARGV" 2>/dev/null)" = "custom def exec -n AWS/comprehensive-codebase-analysis -p . -x -t" ] \
+  && grep -q "atx exit=7" "$TMP/atx-run.log"; then
+  echo "ok: run-atx fails when atx fails, and the estimate stays out of used/"
+else
+  echo "FAIL: run-atx with a failing atx (rc=$F_RC) must fail and keep the estimate" >&2
+  echo "argv: $(cat "$MOCK_ATX_ARGV" 2>/dev/null)" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+# (3) atx succeeds -> estimate moved; regionSource comes from atx's log, not from AWS_REGION
+EST_S="$(new_atx_estimate atx-succeeds)"
+"${ATX_ENV[@]}" APPMOD_ATX_VERIFIED_RECORD="$VREC" MOCK_ATX_RC=0 \
+  bash scripts/aimf/run-atx.sh --estimate "$EST_S" --approved-at "$APPROVED" >/dev/null 2>&1
+S_RC=$?
+if [ "$S_RC" -eq 0 ] && [ -f "$EST_DIR/used/atx-succeeds.json" ] \
+  && grep -q "regionSource=mock-source-from-atx-log region=ap-northeast-1" "$TMP/atx-run.log" \
+  && grep -q "aws_region_env=ap-northeast-1" "$TMP/atx-run.log"; then
+  echo "ok: run-atx records regionSource from atx's own log and AWS_REGION separately"
+else
+  echo "FAIL: run-atx success path (rc=$S_RC) should move the estimate and record regionSource from atx" >&2
+  cat "$TMP/atx-run.log" >&2
+  FAILURES=$((FAILURES + 1))
+fi
 
 echo "----"
 if [ "$FAILURES" -ne 0 ]; then
