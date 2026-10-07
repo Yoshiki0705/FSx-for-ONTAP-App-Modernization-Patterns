@@ -122,6 +122,41 @@ ontap() {
   fi
 }
 
+# Every write (POST/PATCH), and every GET whose answer is used as a fact (SVM and volume UUIDs, DC
+# discovery), goes through here. curl without -f exits 0 on an HTTP error, so `ontap` alone let a
+# refused create read as done and a refused GET read as "no records"; the status is read with -w
+# and checked. A transport error or an HTTP status >= 400 stops the script (exit 1). The response
+# body is printed as before. With a 4th argument the HTTP error is reported and the script
+# continues: used only for the U27 retention setting, which the design applies "if possible".
+# Under dry-run this is `ontap`.
+ontap_checked() {
+  local method="$1" path="$2" body="${3:-}" tolerate="${4:-}"
+  if [ -n "$DRY_RUN" ]; then
+    ontap "$method" "$path" "$body"
+    return 0
+  fi
+  local out status
+  out="$(mktemp)"
+  local args=(-sS -k -u "fsxadmin:$ONTAP_PW" -X "$method" -o "$out" -w '%{http_code}')
+  if [ -n "$body" ]; then args+=(-H 'Content-Type: application/json' -d "$body"); fi
+  if ! status="$(curl "${args[@]}" "https://$MGMT_IP$path")" \
+    || ! [[ "$status" =~ ^[1-5][0-9][0-9]$ ]]; then
+    rm -f "$out"
+    echo "stage0-smb: $method $path failed before an HTTP status (curl transport error, status '${status:-}')" >&2
+    exit 1
+  fi
+  cat "$out"
+  rm -f "$out"
+  if [ "$status" -ge 400 ]; then
+    if [ -n "$tolerate" ]; then
+      note "$method $path returned HTTP $status; continuing ($tolerate)"
+      return 0
+    fi
+    echo "stage0-smb: $method $path returned HTTP $status; stopping" >&2
+    exit 1
+  fi
+}
+
 # GET a path and return 0 only when the response has at least one record. Under dry-run it prints
 # the GET and reports "absent" so the create branch is exercised and shown.
 ontap_exists() {
@@ -131,7 +166,14 @@ ontap_exists() {
     return 1
   fi
   local out
-  out="$(ontap GET "$path")"
+  # Called as `if ontap_exists ...`, where errexit is off, so the curl status is checked here: a
+  # transport failure stops the script instead of reading as "absent". An HTTP error answer still
+  # reads as absent (a missing files/<dir> path answers with an error), and the create that follows
+  # goes through ontap_checked, which stops on an HTTP error.
+  if ! out="$(ontap GET "$path")"; then
+    echo "stage0-smb: GET $path failed (curl transport error)" >&2
+    exit 1
+  fi
   printf '%s' "$out" | python3 -c 'import json,sys
 try:
     data = json.load(sys.stdin)
@@ -149,7 +191,7 @@ svm_uuid() {
     printf '<svm-uuid>'
     return 0
   fi
-  ontap GET "/api/svm/svms?name=$SVM&fields=uuid" \
+  ontap_checked GET "/api/svm/svms?name=$SVM&fields=uuid" \
     | python3 -c 'import json,sys; r=json.load(sys.stdin).get("records",[]); print(r[0]["uuid"] if r else "")'
 }
 
@@ -161,7 +203,7 @@ vol_uuid() {
     printf '<appdata-uuid>'
     return 0
   fi
-  ontap GET "/api/storage/volumes?name=$VOLUME&fields=uuid" \
+  ontap_checked GET "/api/storage/volumes?name=$VOLUME&fields=uuid" \
     | python3 -c 'import json,sys; r=json.load(sys.stdin).get("records",[]); print(r[0]["uuid"] if r else "")'
 }
 
@@ -169,13 +211,24 @@ vol_uuid() {
 # discovered_servers path (the active-directory collection alone is not sufficient; confirmed live
 # 2026-10-07). Requires at least one ms_dc server in state "ok". Exits 4 when none is found.
 assert_dc_discovered() {
-  local uuid; uuid="$(svm_uuid)"
+  # An unresolved SVM UUID is a lookup failure, not "no DC discovered": it must not reach the
+  # exit-4 branch, whose instruction is to tear the environment down.
+  local uuid
+  uuid="$(svm_uuid)" || exit 1
+  if [ -z "$DRY_RUN" ] && [ -z "$uuid" ]; then
+    echo "stage0-smb: could not resolve the SVM UUID for $SVM" >&2
+    exit 1
+  fi
   local path="/api/protocols/cifs/domains/$uuid?fields=discovered_servers"
   if [ -n "$DRY_RUN" ]; then
     echo "DRY-RUN: curl -sS -k -u fsxadmin:<redacted> https://$MGMT_IP$path   # require an ms_dc in state ok"
     return 0
   fi
-  local resp; resp="$(ontap GET "$path")"
+  # An HTTP error answer here still reads as "no DC discovered" (exit 4, R8.3): what ONTAP answers
+  # for an SVM without a domain is not recorded, so that path is left as designed. A transport
+  # failure is checked explicitly and stops with exit 1.
+  local resp
+  resp="$(ontap GET "$path")" || { echo "stage0-smb: GET $path failed (curl transport error)" >&2; exit 1; }
   if ! printf '%s' "$resp" | python3 -c 'import json,sys
 d=json.load(sys.stdin)
 servers=d.get("discovered_servers") or []
@@ -194,7 +247,7 @@ create_share() {
     return 0
   fi
   note "create SMB share appdata at /$VOLUME on $SVM"
-  ontap POST "/api/protocols/cifs/shares" \
+  ontap_checked POST "/api/protocols/cifs/shares" \
     "{\"svm\":{\"name\":\"$SVM\"},\"name\":\"appdata\",\"path\":\"/$VOLUME\"}"
 }
 
@@ -207,13 +260,13 @@ set_share_acl() {
   if ontap_exists "$base?user_or_group=APPMOD\\appsvc"; then
     note "share ACE for APPMOD\\appsvc already present; left unchanged"
   else
-    ontap POST "$base" \
+    ontap_checked POST "$base" \
       "{\"permission\":\"full_control\",\"type\":\"windows\",\"user_or_group\":\"APPMOD\\\\appsvc\"}"
   fi
   if ontap_exists "$base?user_or_group=APPMOD\\appreader"; then
     note "share ACE for APPMOD\\appreader already present; left unchanged"
   else
-    ontap POST "$base" \
+    ontap_checked POST "$base" \
       "{\"permission\":\"read\",\"type\":\"windows\",\"user_or_group\":\"APPMOD\\\\appreader\"}"
   fi
 }
@@ -235,7 +288,7 @@ set_ntfs_acls() {
   # rejects the granular advanced_rights.read_attributes keys). The deny ACE uses advanced_rights
   # for the write/append bits only.
   local apply_to="\"apply_to\":{\"this_folder\":true,\"sub_folders\":true,\"files\":true}"
-  ontap POST "$path?propagation_mode=propagate" \
+  ontap_checked POST "$path?propagation_mode=propagate" \
     "{\"acls\":[\
 {\"access\":\"access_allow\",\"user\":\"APPMOD\\\\appsvc\",$apply_to,\"rights\":\"modify\"},\
 {\"access\":\"access_allow\",\"user\":\"APPMOD\\\\appreader\",$apply_to,\"rights\":\"read\"},\
@@ -254,7 +307,7 @@ create_directories() {
       continue
     fi
     note "create directory $dir/ on $VOLUME"
-    ontap POST "/api/storage/volumes/$VOL_UUID/files/$dir" \
+    ontap_checked POST "/api/storage/volumes/$VOL_UUID/files/$dir" \
       "{\"type\":\"directory\",\"unix_permissions\":\"0775\"}"
   done
 }
@@ -265,7 +318,7 @@ create_itclone_role() {
     note "role appmod_itclone already present; left unchanged"
   else
     note "create REST role appmod_itclone (volumes, volumes/*/snapshots, recovery-queue CLI) [U26]"
-    ontap POST "/api/security/roles" \
+    ontap_checked POST "/api/security/roles" \
       "{\"name\":\"appmod_itclone\",\"owner\":{\"name\":\"$SVM\"},\"privileges\":[\
 {\"path\":\"/api/storage/volumes\",\"access\":\"all\"},\
 {\"path\":\"/api/storage/volumes/*/snapshots\",\"access\":\"all\"},\
@@ -286,7 +339,7 @@ create_itclone_role() {
   itpw="$(aws --region "$REGION" secretsmanager get-secret-value \
     --secret-id appmod/ontap-itclone --query SecretString --output text \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')"
-  ontap POST "/api/security/accounts" \
+  ontap_checked POST "/api/security/accounts" \
     "{\"name\":\"appmod-itclone\",\"owner\":{\"name\":\"$SVM\"},\"role\":\"appmod_itclone\",\"applications\":[{\"application\":\"http\",\"authentication_methods\":[\"password\"]}],\"password\":\"$itpw\"}"
   unset itpw
 }
@@ -297,7 +350,7 @@ create_readonly_role() {
     return 0
   fi
   note "create read-only REST role appmod_readonly (boundary reads in stage 2) [U26]"
-  ontap POST "/api/security/roles" \
+  ontap_checked POST "/api/security/roles" \
     "{\"name\":\"appmod_readonly\",\"owner\":{\"name\":\"$SVM\"},\"privileges\":[\
 {\"path\":\"/api/cluster\",\"access\":\"readonly\"},\
 {\"path\":\"/api/storage/volumes\",\"access\":\"readonly\"},\
@@ -308,8 +361,8 @@ set_delete_retention() {
   # U27: set the SVM volume-delete-retention-hours to 0 if the advanced CLI path allows it, so a
   # FlexClone delete does not linger in the recovery queue. This does NOT enable any lock.
   note "set volume-delete-retention-hours=0 on $SVM via the advanced CLI path [U27]"
-  ontap PATCH "/api/private/cli/vserver?vserver=$SVM" \
-    "{\"volume_delete_retention_hours\":0}"
+  ontap_checked PATCH "/api/private/cli/vserver?vserver=$SVM" \
+    "{\"volume_delete_retention_hours\":0}" "U27: retention not set; record this outcome"
 }
 
 note "configure SMB on SVM $SVM, volume $VOLUME (idempotent, check-then-create)"
@@ -317,7 +370,7 @@ resolve_mgmt_ip
 note "ONTAP management endpoint: $MGMT_IP"
 
 if [ -z "$DRY_RUN" ]; then
-  ONTAP_PW="$(read_fsxadmin_password)"
+  ONTAP_PW="$(read_fsxadmin_password)" || { echo "stage0-smb: could not read $SECRET_ID" >&2; exit 1; }
   trap 'unset ONTAP_PW 2>/dev/null || true' EXIT
 fi
 
@@ -325,8 +378,8 @@ assert_dc_discovered
 
 # Resolve the SVM and volume UUIDs once; the share-ACL, file-security and files/{path} endpoints
 # take the UUID in their path, not the name.
-SVM_UUID="$(svm_uuid)"
-VOL_UUID="$(vol_uuid)"
+SVM_UUID="$(svm_uuid)" || exit 1
+VOL_UUID="$(vol_uuid)" || exit 1
 if [ -z "$DRY_RUN" ]; then
   if [ -z "$SVM_UUID" ]; then echo "stage0-smb: could not resolve the SVM UUID for $SVM" >&2; exit 1; fi
   if [ -z "$VOL_UUID" ]; then echo "stage0-smb: could not resolve the volume UUID for $VOLUME" >&2; exit 1; fi

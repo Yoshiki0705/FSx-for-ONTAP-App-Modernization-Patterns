@@ -33,19 +33,28 @@ sha_cmd() {
 }
 
 seed_root="$MOUNT/seed"
+# List first and check the status: a process substitution's exit status is never checked, so a
+# find that failed part-way (an unreadable directory, an NFS error) would yield a short inventory
+# that reads as complete. Deterministic order so two inventories compare cleanly.
+if ! FILES="$(find "$seed_root" -type f | LC_ALL=C sort)"; then
+  echo "inventory: listing $seed_root failed; no inventory written" >&2
+  exit 1
+fi
 {
   echo '{'
   echo '  "store": {"kind": "nfs", "root": "'"$MOUNT"'"},'
   echo '  "files": ['
   first=1
-  # Deterministic order so two inventories compare cleanly.
   while IFS= read -r file; do
+    [ -n "$file" ] || continue
     rel="seed/${file#"$seed_root"/}"
     size="$(wc -c <"$file" | tr -d ' ')"
     sha="$(sha_cmd "$file")"
     if [ "$first" -eq 1 ]; then first=0; else echo '    ,'; fi
     printf '    {"path": "%s", "size": %s, "sha256": "%s"}\n' "$rel" "$size" "$sha"
-  done < <(find "$seed_root" -type f | LC_ALL=C sort)
+  done <<EOF
+$FILES
+EOF
   echo '  ]'
   echo '}'
 } >"$OUT"

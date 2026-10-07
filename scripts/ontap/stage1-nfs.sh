@@ -202,7 +202,7 @@ ensure_unix_user() {
     return 0
   fi
   local status existing
-  status="$(ontap_call GET "$path?fields=id,primary_gid")"
+  status="$(ontap_status GET "$path?fields=id,primary_gid")" || exit 1
   if [ "$status" = "200" ]; then
     existing="$(ontap_jq 'str(d.get("id", ""))')"
     if [ "$existing" != "$uid" ]; then
@@ -291,13 +291,13 @@ report_default_users() {
     return 0
   fi
   local status
-  status="$(ontap_call GET "$cifs")"
+  status="$(ontap_status GET "$cifs")" || exit 1
   if [ "$status" = "200" ]; then
     ontap_note "current CIFS default_unix_user: '$(ontap_jq 'd.get("default_unix_user", "<not returned>")')'"
   else
     ontap_note "CIFS default_unix_user not readable (HTTP $status)"
   fi
-  status="$(ontap_call GET "$nfs")"
+  status="$(ontap_status GET "$nfs")" || exit 1
   if [ "$status" = "200" ]; then
     ontap_note "current NFS windows.default_user: '$(ontap_jq '(d.get("windows") or {}).get("default_user", "<not returned>")')'"
   else
@@ -310,8 +310,8 @@ ontap_resolve_mgmt_ip
 ontap_note "ONTAP management endpoint: $MGMT_IP"
 ontap_login fsxadmin "$SECRET_ID"
 
-SVM_UUID="$(ontap_svm_uuid "$SVM")"
-VOL_UUID="$(ontap_volume_uuid "$VOLUME" "$SVM")"
+SVM_UUID="$(ontap_svm_uuid "$SVM")" || exit 1
+VOL_UUID="$(ontap_volume_uuid "$VOLUME" "$SVM")" || exit 1
 POLICY_ID=""
 ontap_note "resolved SVM UUID and volume UUID for the UUID-keyed endpoints"
 

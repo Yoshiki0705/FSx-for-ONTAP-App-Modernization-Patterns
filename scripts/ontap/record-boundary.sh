@@ -99,6 +99,11 @@ read_ontap_password() {
 # empty JSON object is returned so the capture code runs without a call. -k is required because the
 # management endpoint's certificate CN is the management DNS name while this reaches it by the
 # management IP, so IP-based hostname verification cannot match.
+#
+# curl without -f exits 0 on an HTTP error, and the record builder reads an error body as "no
+# records", so a failed GET would be recorded as no export policies, no name mappings or no
+# snapshots. The status is therefore read with -w and checked: a transport error or an HTTP status
+# >= 400 exits 1 and no record is written. Callers run this as X="$(ontap_get ...)" || exit 1.
 ontap_get() {
   local path="$1"
   if [ -n "$DRY_RUN" ]; then
@@ -106,24 +111,40 @@ ontap_get() {
     printf '{}'
     return 0
   fi
-  curl -sS -k -u "fsxadmin:$ONTAP_PW" "https://$MGMT_IP$path"
+  local body status
+  body="$(mktemp)"
+  if ! status="$(curl -sS -k -u "fsxadmin:$ONTAP_PW" -o "$body" -w '%{http_code}' "https://$MGMT_IP$path")" \
+    || ! [[ "$status" =~ ^[1-5][0-9][0-9]$ ]]; then
+    rm -f "$body"
+    echo "record-boundary: GET $path failed before an HTTP status (curl transport error, status '${status:-}')" >&2
+    exit 1
+  fi
+  if [ "$status" -ge 400 ]; then
+    echo "record-boundary: GET $path returned HTTP $status; no record written" >&2
+    cat "$body" >&2 || true
+    echo >&2
+    rm -f "$body"
+    exit 1
+  fi
+  cat "$body"
+  rm -f "$body"
 }
 
 echo "record-boundary: $BOUNDARY run $RUN_ID from ${MGMT_IP:-<unresolved>} (read-only)"
 resolve_mgmt_ip
 
 if [ -z "$DRY_RUN" ]; then
-  ONTAP_PW="$(read_ontap_password)"
+  ONTAP_PW="$(read_ontap_password)" || { echo "record-boundary: could not read $SECRET_ID" >&2; exit 1; }
   trap 'unset ONTAP_PW 2>/dev/null || true' EXIT
 fi
 
 # The five GETs that supply the record. snapshot_locking_enabled and snaplock.type are READ here,
 # never set; reading them is explicitly allowed by the irreversibility guard.
-CLUSTER_JSON="$(ontap_get "/api/cluster?fields=version")"
-VOLUMES_JSON="$(ontap_get "/api/storage/volumes?fields=name,uuid,nas.security_style,nas.export_policy.name,snapshot_locking_enabled,snaplock.type")"
-VOL_UUID_JSON="$(ontap_get "/api/storage/volumes?name=$VOLUME&fields=uuid")"
-EXPORT_JSON="$(ontap_get "/api/protocols/nfs/export-policies?svm.name=$SVM&fields=name,rules")"
-NAMEMAP_JSON="$(ontap_get "/api/name-services/name-mappings?svm.name=$SVM")"
+CLUSTER_JSON="$(ontap_get "/api/cluster?fields=version")" || exit 1
+VOLUMES_JSON="$(ontap_get "/api/storage/volumes?fields=name,uuid,nas.security_style,nas.export_policy.name,snapshot_locking_enabled,snaplock.type")" || exit 1
+VOL_UUID_JSON="$(ontap_get "/api/storage/volumes?name=$VOLUME&fields=uuid")" || exit 1
+EXPORT_JSON="$(ontap_get "/api/protocols/nfs/export-policies?svm.name=$SVM&fields=name,rules")" || exit 1
+NAMEMAP_JSON="$(ontap_get "/api/name-services/name-mappings?svm.name=$SVM")" || exit 1
 
 # Resolve the target volume UUID so the snapshot list can be fetched for it. Under dry-run this
 # yields an empty id and the snapshot GET is still printed with the placeholder.
@@ -133,7 +154,7 @@ try:
     print(r[0]["uuid"] if r else "")
 except Exception:
     print("")')"
-SNAP_JSON="$(ontap_get "/api/storage/volumes/${VOL_UUID:-<appdata-uuid>}/snapshots?fields=name,create_time")"
+SNAP_JSON="$(ontap_get "/api/storage/volumes/${VOL_UUID:-<appdata-uuid>}/snapshots?fields=name,create_time")" || exit 1
 
 WIN_SHA="$(sha_of "$WIN_INV")"
 LNX_SHA="$(sha_of "$LNX_INV")"

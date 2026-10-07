@@ -141,6 +141,8 @@ test: ## 検出器の unittest、スクリプトの単体テスト、ガード�
 	$(PYTHON) scripts/make-seed.py --selftest
 	# Shell dry-run tests (deploy / run-atx / block_direct_atx / check-no-locking / integration-clone)
 	bash scripts/tests/dryrun_shell_tests.sh
+	# Failure-path mock tests: a failed aws / curl / git / gitleaks call never reads as success
+	bash scripts/tests/failure_path_tests.sh
 	# Every test file on disk must be reached by this target
 	$(PYTHON) scripts/tests/check_test_coverage.py
 

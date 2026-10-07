@@ -93,6 +93,16 @@ except json.JSONDecodeError as exc:
     print(f"check-no-locking: response is not JSON: {exc}", file=sys.stderr)
     sys.exit(3)
 
+if not isinstance(data, dict):
+    print("check-no-locking: response is not a JSON object", file=sys.stderr)
+    sys.exit(3)
+
+# A paginated collection carries _links.next. Judging the first page only could miss a locked
+# volume on a later page while appdata on page one satisfies the target check, so refuse it.
+if (data.get("_links") or {}).get("next"):
+    print("check-no-locking: response is paginated; refusing a partial scan", file=sys.stderr)
+    sys.exit(3)
+
 records = data.get("records", [])
 names = [r.get("name", "<unnamed>") for r in records]
 print("scanned volumes: " + (", ".join(names) if names else "(none)"))

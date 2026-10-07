@@ -112,7 +112,14 @@ collect_probe() {
     --command-id "$command_id" --instance-id "$instance" \
     --query 'StandardOutputContent' --output text | sed 's/\r$//' >"$OUT_DIR/$side.json"
   echo "run-probe: $side status=$status rc=$rc -> $OUT_DIR/$side.json"
+  # The probe exits 0 whenever it ran (a failing behavior is recorded as outcome "error"), so a
+  # non-Success status means this side produced no record. Recorded here and checked before the
+  # merge, after every side has been collected for diagnosis.
+  COLLECTED_SIDES="$COLLECTED_SIDES $side"
+  if [ "$status" != "Success" ]; then FAILED_SIDES="$FAILED_SIDES $side"; fi
 }
+COLLECTED_SIDES=""
+FAILED_SIDES=""
 
 # Windows DocIntake.Probe over SMB (holder). The launcher establishes the appsvc SMB session first
 # (SSM runs as SYSTEM, which otherwise cannot reach the share) and invokes the deployed Probe.
@@ -148,6 +155,7 @@ fi
 # topology=cross-host on the two-client behaviors and keeps the three-valued outcome.
 merge_results() {
   if [ -n "$DRY_RUN" ]; then
+    COLLECTED_SIDES="windows linux-smb"
     cat >"$OUT_DIR/windows.json" <<EOF
 {"schema":"appmod-probe/1","run_id":"$RUN_ID","stage":$STAGE,"role":"holder","behaviors":[
   {"id":"file-locking","outcome":"measured","observed":{"topology":"single-host","denied":true}},
@@ -160,6 +168,7 @@ EOF
 EOF
   fi
   APPMOD_RUN_ID="$RUN_ID" APPMOD_STAGE="$STAGE" APPMOD_OUT_DIR="$OUT_DIR" \
+  APPMOD_EXPECTED_SIDES="$COLLECTED_SIDES" \
   APPMOD_TWO_CLIENT="$TWO_CLIENT_BEHAVIORS" python3 - <<'PY'
 import glob
 import json
@@ -179,6 +188,16 @@ for path in sorted(glob.glob(os.path.join(out_dir, "*.json"))):
         sides[name] = json.load(open(path, encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         continue
+
+# Every side collected in this run must have produced a readable record. A side silently skipped
+# here would leave a one-sided merge that is still labeled cross-host.
+expected = os.environ.get("APPMOD_EXPECTED_SIDES", "").split()
+unreadable = [s for s in expected if f"{s}.json" not in sides]
+if unreadable:
+    raise SystemExit(
+        "run-probe: no readable appmod-probe/1 record from: " + ", ".join(unreadable)
+        + "; not merging"
+    )
 
 # Collect every behavior id seen across the collected sides.
 behavior_ids = []
@@ -227,5 +246,10 @@ print(f"run-probe: merged {len(merged)} behavior(s) from {len(sides)} side(s) in
 PY
 }
 
+if [ -n "$FAILED_SIDES" ]; then
+  echo "run-probe: the probe command did not succeed on:$FAILED_SIDES; not merging" >&2
+  echo "run-probe: each side's output is kept under $OUT_DIR/ for diagnosis" >&2
+  exit 1
+fi
 merge_results
 echo "run-probe: coordination complete for stage $STAGE run $RUN_ID"

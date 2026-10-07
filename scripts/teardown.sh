@@ -58,9 +58,19 @@ SCHEDULE_NAME="$STAGE3_STACK-worker-poll"
 TARGET_VOLUME="appdata"
 SECRETS="${APPMOD_SECRETS:-appmod/ad-admin appmod/fsxadmin appmod/app-users appmod/ontap-itclone}"
 STAGE_PREFIX="teardown/scripts/ontap"
-# Polling budgets (tries x seconds). Overridable for tests; dry-run never sleeps.
-SSM_ONLINE_TRIES=30; SSM_ONLINE_SLEEP=20
-ABSENCE_TRIES=10; ABSENCE_SLEEP=60
+# Polling budgets (tries x seconds). Overridable for tests through the APPMOD_* variables below;
+# dry-run never sleeps.
+SSM_ONLINE_TRIES="${APPMOD_SSM_ONLINE_TRIES:-30}"; SSM_ONLINE_SLEEP="${APPMOD_SSM_ONLINE_SLEEP:-20}"
+ABSENCE_TRIES="${APPMOD_ABSENCE_TRIES:-10}"; ABSENCE_SLEEP="${APPMOD_ABSENCE_SLEEP:-60}"
+for budget in "$SSM_ONLINE_TRIES" "$SSM_ONLINE_SLEEP" "$ABSENCE_TRIES" "$ABSENCE_SLEEP"; do
+  case "$budget" in
+    ''|*[!0-9]*) echo "teardown: polling budgets must be non-negative integers (got '$budget')" >&2; exit 2 ;;
+  esac
+done
+# At least one try: BSD seq counts down for `seq 1 0`, so 0 would not mean "no check".
+if [ "$SSM_ONLINE_TRIES" -lt 1 ] || [ "$ABSENCE_TRIES" -lt 1 ]; then
+  echo "teardown: APPMOD_SSM_ONLINE_TRIES and APPMOD_ABSENCE_TRIES must be at least 1" >&2; exit 2
+fi
 
 # Out-of-band inline policies added to the Windows role on an environment created before
 # templates/base.yaml carried the grants. Their names differ from the template's policies, so on a
@@ -238,11 +248,15 @@ delete_stage3() {
     return 0
   fi
   # Disable the schedule first so no invocation runs while the stack is being deleted.
-  local schedule input
+  # Only ResourceNotFoundException means "no schedule". Any other get-schedule failure (expired
+  # session, throttling) stops here, so the stack is never deleted with the schedule still enabled.
+  local schedule input err=""
+  if [ -z "$DRY_RUN" ]; then err="$(mktemp)"; fi
   if [ -n "$DRY_RUN" ]; then
     aws_r scheduler get-schedule --name "$SCHEDULE_NAME" --output json
     aws_r scheduler update-schedule --cli-input-json "<get-schedule output with State=DISABLED>"
-  elif schedule="$(aws_r scheduler get-schedule --name "$SCHEDULE_NAME" --output json 2>/dev/null)"; then
+  elif schedule="$(aws_r scheduler get-schedule --name "$SCHEDULE_NAME" --output json 2>"$err")"; then
+    rm -f "$err"
     input="$(printf '%s' "$schedule" | python3 -c 'import json,sys
 s = json.load(sys.stdin)
 keep = ("Name", "GroupName", "ScheduleExpression", "ScheduleExpressionTimezone", "StartDate",
@@ -252,8 +266,13 @@ out["State"] = "DISABLED"
 print(json.dumps(out))')"
     aws_r scheduler update-schedule --cli-input-json "$input" >/dev/null
     echo "    schedule $SCHEDULE_NAME disabled"
-  else
+  elif grep -q "ResourceNotFoundException" "$err"; then
+    rm -f "$err"
     echo "    schedule $SCHEDULE_NAME not found; continuing to the stack delete"
+  else
+    cat "$err" >&2
+    rm -f "$err"
+    die 1 "get-schedule $SCHEDULE_NAME failed; not deleting $STAGE3_STACK while the schedule may be enabled"
   fi
   aws_r cloudformation delete-stack --stack-name "$STAGE3_STACK"
   if ! aws_r cloudformation wait stack-delete-complete --stack-name "$STAGE3_STACK"; then
@@ -294,7 +313,9 @@ run_verify_clean() {
 }
 
 # Resolve appdata by enumerating the file system's volumes. Prints the volume id, or "" when it is
-# already gone. A given --volume-id must match.
+# already gone. A given --volume-id must match. Always called as x="$(resolve_appdata_volume)",
+# where bash clears errexit, so the describe-volumes status is checked explicitly: a failed query
+# exits 1 instead of reading as "appdata is already gone". Callers check the substitution status.
 resolve_appdata_volume() {
   if [ -n "$DRY_RUN" ]; then
     aws_r fsx describe-volumes --filters "Name=file-system-id,Values=$FS_ID" \
@@ -304,7 +325,8 @@ resolve_appdata_volume() {
   fi
   local found
   found="$(aws_r fsx describe-volumes --filters "Name=file-system-id,Values=$FS_ID" \
-    --query "Volumes[?Name=='$TARGET_VOLUME'].VolumeId" --output text)"
+    --query "Volumes[?Name=='$TARGET_VOLUME'].VolumeId" --output text)" \
+    || die 1 "describe-volumes failed; not treating $TARGET_VOLUME as gone"
   if [ "$found" = "None" ]; then found=""; fi
   case "$found" in *[[:space:]]*) die 2 "more than one volume named $TARGET_VOLUME on $FS_ID: $found" ;; esac
   if [ -n "$VOLUME_ID" ] && [ -n "$found" ] && [ "$found" != "$VOLUME_ID" ]; then
@@ -366,7 +388,7 @@ delete_appdata() {
     wait_volume_gone "$id"
   done
   local appdata
-  appdata="$(resolve_appdata_volume)"
+  appdata="$(resolve_appdata_volume)" || exit "$?"
   if [ -z "$appdata" ]; then
     echo "    $TARGET_VOLUME is already gone from $FS_ID"
     return 0
@@ -431,49 +453,53 @@ delete_secrets() {
 
 # Step 10: enumerate through the APIs; the stack resource list is gone by now and would not show a
 # retained or out-of-band resource anyway. Each check prints what it found.
+#
+# residuals runs as left="$(residuals)", where bash clears errexit (macOS /bin/bash 3.2 has no
+# inherit_errexit), so an unchecked failed query would leave its result empty and count the
+# resource as absent. Every query goes through probe, which checks the call's status itself: a
+# failed call (expired SSO session, throttling, network loss) is recorded as <label>:QUERY-FAILED,
+# which keeps the result non-empty, so confirm_absence keeps polling and then dies 1.
+probe() {  # probe <label> <aws args...>; appends to $out of the caller (residuals)
+  local label="$1" v; shift
+  if ! v="$(aws_r "$@")"; then out="$out $label:QUERY-FAILED"; return 0; fi
+  [ -z "$v" ] || [ "$v" = "None" ] || out="$out $label:$v"
+}
+
 residuals() {
-  local out="" v
-  v="$(aws_r fsx describe-file-systems --query "FileSystems[?FileSystemId=='$FS_ID'].FileSystemId" --output text)"
-  [ -z "$v" ] || [ "$v" = "None" ] || out="$out file-system:$v"
-  v="$(aws_r fsx describe-storage-virtual-machines --filters "Name=file-system-id,Values=$FS_ID" \
-    --query 'StorageVirtualMachines[].StorageVirtualMachineId' --output text)"
-  [ -z "$v" ] || [ "$v" = "None" ] || out="$out svm:$v"
-  v="$(aws_r fsx describe-volumes --filters "Name=file-system-id,Values=$FS_ID" --query 'Volumes[].VolumeId' --output text)"
-  [ -z "$v" ] || [ "$v" = "None" ] || out="$out volume:$v"
-  v="$(aws_r fsx describe-backups --filters "Name=file-system-id,Values=$FS_ID" --query 'Backups[].BackupId' --output text)"
-  [ -z "$v" ] || [ "$v" = "None" ] || out="$out backup(fs):$v"
+  local out=""
+  probe file-system fsx describe-file-systems \
+    --query "FileSystems[?FileSystemId=='$FS_ID'].FileSystemId" --output text
+  probe svm fsx describe-storage-virtual-machines --filters "Name=file-system-id,Values=$FS_ID" \
+    --query 'StorageVirtualMachines[].StorageVirtualMachineId' --output text
+  probe volume fsx describe-volumes --filters "Name=file-system-id,Values=$FS_ID" \
+    --query 'Volumes[].VolumeId' --output text
+  probe "backup(fs)" fsx describe-backups --filters "Name=file-system-id,Values=$FS_ID" \
+    --query 'Backups[].BackupId' --output text
   # H4: backups by volume id as well. confirm_absence reports when no appdata id is known.
   local vid="${VOLUME_ID:-$APPDATA_ID}"
   if [ -n "$vid" ]; then
-    v="$(aws_r fsx describe-backups --filters "Name=volume-id,Values=$vid" --query 'Backups[].BackupId' --output text)"
-    [ -z "$v" ] || [ "$v" = "None" ] || out="$out backup(volume):$v"
+    probe "backup(volume)" fsx describe-backups --filters "Name=volume-id,Values=$vid" \
+      --query 'Backups[].BackupId' --output text
   fi
-  v="$(aws_r fsx describe-s3-access-point-attachments --filters "Name=file-system-id,Values=$FS_ID" \
-    --query 'S3AccessPointAttachments[].Name' --output text)"
-  [ -z "$v" ] || [ "$v" = "None" ] || out="$out access-point:$v"
-  v="$(aws_r ds describe-directories \
-    --query "DirectoryDescriptions[?DirectoryId=='${DIRECTORY_ID:-none}' || Name=='$DOMAIN_NAME'].DirectoryId" --output text)"
-  [ -z "$v" ] || [ "$v" = "None" ] || out="$out directory:$v"
-  v="$(aws_r ec2 describe-instances --filters Name=tag-key,Values=appmod \
+  probe access-point fsx describe-s3-access-point-attachments --filters "Name=file-system-id,Values=$FS_ID" \
+    --query 'S3AccessPointAttachments[].Name' --output text
+  probe directory ds describe-directories \
+    --query "DirectoryDescriptions[?DirectoryId=='${DIRECTORY_ID:-none}' || Name=='$DOMAIN_NAME'].DirectoryId" --output text
+  probe ec2 ec2 describe-instances --filters Name=tag-key,Values=appmod \
     "Name=instance-state-name,Values=pending,running,stopping,stopped,shutting-down" \
-    --query 'Reservations[].Instances[].InstanceId' --output text)"
-  [ -z "$v" ] || [ "$v" = "None" ] || out="$out ec2:$v"
+    --query 'Reservations[].Instances[].InstanceId' --output text
   # ENIs and endpoints: by tag, and also by the dedicated VPC when --vpc-id is given (the file
   # system and directory ENIs carry no appmod tag). Pass --vpc-id only for a VPC this stack created.
   local net_filter="Name=tag-key,Values=appmod"
   if [ -n "$VPC_ID" ]; then net_filter="Name=vpc-id,Values=$VPC_ID"; fi
-  v="$(aws_r ec2 describe-vpcs --filters Name=tag-key,Values=appmod --query 'Vpcs[].VpcId' --output text)"
-  [ -z "$v" ] || [ "$v" = "None" ] || out="$out vpc:$v"
-  v="$(aws_r ec2 describe-network-interfaces --filters "$net_filter" \
-    --query 'NetworkInterfaces[].NetworkInterfaceId' --output text)"
-  [ -z "$v" ] || [ "$v" = "None" ] || out="$out eni:$v"
+  probe vpc ec2 describe-vpcs --filters Name=tag-key,Values=appmod --query 'Vpcs[].VpcId' --output text
+  probe eni ec2 describe-network-interfaces --filters "$net_filter" \
+    --query 'NetworkInterfaces[].NetworkInterfaceId' --output text
   # shellcheck disable=SC2016  # backticks are JMESPath literals, not shell expansion
-  v="$(aws_r ec2 describe-vpc-endpoints --filters "$net_filter" \
-    --query 'VpcEndpoints[?State!=`deleted` && State!=`Deleted`].VpcEndpointId' --output text)"
-  [ -z "$v" ] || [ "$v" = "None" ] || out="$out endpoint:$v"
-  v="$(aws_r secretsmanager list-secrets --include-planned-deletion --filters Key=name,Values=appmod/ \
-    --query 'SecretList[].Name' --output text)"
-  [ -z "$v" ] || [ "$v" = "None" ] || out="$out secret:$v"
+  probe endpoint ec2 describe-vpc-endpoints --filters "$net_filter" \
+    --query 'VpcEndpoints[?State!=`deleted` && State!=`Deleted`].VpcEndpointId' --output text
+  probe secret secretsmanager list-secrets --include-planned-deletion --filters Key=name,Values=appmod/ \
+    --query 'SecretList[].Name' --output text
   printf '%s' "$out"
 }
 
@@ -486,7 +512,7 @@ confirm_absence() {
     echo "    no --volume-id was given); only the file-system-id backup filter is checked"
   fi
   for i in $(seq 1 "$ABSENCE_TRIES"); do
-    left="$(residuals)"
+    if ! left="$(residuals)"; then left="$left residuals:QUERY-FAILED"; fi
     if [ -z "$left" ]; then
       echo "    nothing left (file system, SVM, volumes, backups, access points, directory, tagged"
       echo "    EC2/ENI/endpoints, secrets) after $i check(s)"
@@ -551,7 +577,7 @@ teardown_full() {
 # Step 3 needs the appdata volume id; resolve it (by enumeration) right before the check.
 confirm_no_access_point_resolved() {
   local resolved
-  resolved="$(resolve_appdata_volume)"
+  resolved="$(resolve_appdata_volume)" || exit "$?"
   if [ -z "$resolved" ]; then
     echo "    $TARGET_VOLUME already gone; checking the file system only"
   else

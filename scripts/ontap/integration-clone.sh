@@ -158,7 +158,7 @@ wait_count() {
   local path="$1" want="$2" what="$3" i n
   if [ -n "$DRY_RUN" ]; then return 0; fi
   for i in $(seq 1 "$POLL_TRIES"); do
-    n="$(ontap_count "$path")"
+    n="$(ontap_count "$path")" || exit 1
     if { [ "$want" = "0" ] && [ "$n" = "0" ]; } || { [ "$want" = "1" ] && [ "$n" != "0" ]; }; then
       return 0
     fi
@@ -171,8 +171,8 @@ connect() {
   ontap_resolve_mgmt_ip
   ontap_note "ONTAP management endpoint: $MGMT_IP (account $ONTAP_ACCOUNT)"
   ontap_login "$ONTAP_ACCOUNT" "$SECRET_ID"
-  SVM_UUID="$(ontap_svm_uuid "$SVM")"
-  PARENT_UUID="$(ontap_volume_uuid "$PARENT" "$SVM")"
+  SVM_UUID="$(ontap_svm_uuid "$SVM")" || exit 1
+  PARENT_UUID="$(ontap_volume_uuid "$PARENT" "$SVM")" || exit 1
 }
 
 do_create() {
@@ -181,7 +181,11 @@ do_create() {
   local snaps="/api/storage/volumes/$PARENT_UUID/snapshots"
   local snap_query="$snaps?name=$snap&fields=uuid"
   ontap_note "create snapshot $snap on $PARENT (no retention, no expiry) and FlexClone $clone"
-  if [ "$(ontap_count "$snap_query")" != "0" ]; then
+  # Assigned before comparing: a substitution inside [ ] is never checked, so a failed lookup
+  # would read as "present" and skip the create.
+  local n
+  n="$(ontap_count "$snap_query")" || exit 1
+  if [ "$n" != "0" ]; then
     ontap_note "snapshot $snap already present; left unchanged"
   else
     # The body carries the name only: no expiry_time, no snaplock_expiry_time, no snapmirror_label.
@@ -189,7 +193,8 @@ do_create() {
     wait_count "$snap_query" 1 "snapshot $snap"
   fi
   local clone_query="/api/storage/volumes?name=$clone&svm.uuid=$SVM_UUID&fields=uuid"
-  if [ "$(ontap_count "$clone_query")" != "0" ]; then
+  n="$(ontap_count "$clone_query")" || exit 1
+  if [ "$n" != "0" ]; then
     ontap_note "FlexClone $clone already present; left unchanged"
   else
     ontap_ok POST "/api/storage/volumes?return_timeout=120" \
@@ -199,7 +204,10 @@ do_create() {
   # The clone must not carry snapshot locking (it never should; this is a read-only assertion).
   if [ -z "$DRY_RUN" ]; then
     ontap_ok GET "/api/storage/volumes?name=$clone&svm.uuid=$SVM_UUID&fields=snapshot_locking_enabled"
-    if [ "$(ontap_jq 'str((d.get("records") or [{}])[0].get("snapshot_locking_enabled", False))')" = "True" ]; then
+    local locked
+    locked="$(ontap_jq 'str((d.get("records") or [{}])[0].get("snapshot_locking_enabled", False))')" \
+      || ontap_die 1 "could not parse the snapshot_locking_enabled answer for $clone"
+    if [ "$locked" = "True" ]; then
       ontap_die 3 "FlexClone $clone reports snapshot_locking_enabled true; stop and report"
     fi
   fi
@@ -215,13 +223,18 @@ clone_uuid_checked() {
     printf '<%s-uuid>' "$clone"
     return 0
   fi
+  # This function runs inside $(...), where errexit is off: ontap_ok exits on a transport or HTTP
+  # error itself, and each parse below is checked explicitly.
   ontap_ok GET "$path"
   # Absent clone: print nothing. Checked on the record count, before any field is parsed.
-  if [ "$(ontap_jq 'len(d.get("records") or [])')" = "0" ]; then return 0; fi
+  local count
+  count="$(ontap_jq 'len(d.get("records") or [])')" || ontap_die 1 "could not parse the $clone lookup"
+  if [ "$count" = "0" ]; then return 0; fi
   local facts uuid flex parent
   # Unit separator (0x1f), not tab: tab is IFS whitespace, so `read` would collapse an empty
   # leading field and shift is_flexclone into uuid.
-  facts="$(ontap_jq '"\x1f".join(str(x) for x in ((lambda r: (r.get("uuid", ""), (r.get("clone") or {}).get("is_flexclone", False), ((r.get("clone") or {}).get("parent_volume") or {}).get("name", "")))((d.get("records") or [{}])[0])))')"
+  facts="$(ontap_jq '"\x1f".join(str(x) for x in ((lambda r: (r.get("uuid", ""), (r.get("clone") or {}).get("is_flexclone", False), ((r.get("clone") or {}).get("parent_volume") or {}).get("name", "")))((d.get("records") or [{}])[0])))')" \
+    || ontap_die 1 "could not parse the $clone record"
   IFS=$'\x1f' read -r uuid flex parent <<EOF
 $facts
 EOF
@@ -244,11 +257,12 @@ purge_recovery_queue() {
     entries="<$clone recovery-queue entry>"
   else
     local status
-    status="$(ontap_call GET "$show")"
+    status="$(ontap_status GET "$show")" || exit 1
     if [ "$status" -ge 400 ]; then
       ontap_die 1 "recovery-queue show returned HTTP $status (U26: the passthrough or its RBAC for $ONTAP_ACCOUNT is unconfirmed)"
     fi
-    entries="$(ontap_jq '[r.get("volume", "") for r in d.get("records", [])]')"
+    entries="$(ontap_jq '[r.get("volume", "") for r in d.get("records", [])]')" \
+      || ontap_die 1 "could not parse the recovery-queue answer"
   fi
   local entry
   while IFS= read -r entry; do
@@ -259,8 +273,12 @@ purge_recovery_queue() {
   done <<EOF
 $entries
 EOF
-  if [ -z "$DRY_RUN" ] && [ "$(ontap_count "$show")" != "0" ]; then
-    ontap_die 1 "recovery queue still holds an entry for $clone after purge"
+  if [ -z "$DRY_RUN" ]; then
+    local left
+    left="$(ontap_count "$show")" || exit 1
+    if [ "$left" != "0" ]; then
+      ontap_die 1 "recovery queue still holds an entry for $clone after purge"
+    fi
   fi
 }
 
@@ -269,7 +287,8 @@ do_delete() {
   valid_clone_name "$clone" || exit 2
   snap="$(snapshot_name_for "$clone")"
   ontap_note "delete order: FlexClone $clone -> recovery-queue purge -> snapshot $snap"
-  clone_uuid="$(clone_uuid_checked "$clone")"
+  # exit "$?" keeps the guard's exit 2 (not a FlexClone of appdata) distinct from a failed call (1).
+  clone_uuid="$(clone_uuid_checked "$clone")" || exit "$?"
   if [ -n "$clone_uuid" ]; then
     ontap_ok PATCH "/api/storage/volumes/$clone_uuid?return_timeout=120" '{"nas":{"path":""}}'
     ontap_ok DELETE "/api/storage/volumes/$clone_uuid?force=true&return_timeout=120"
@@ -280,7 +299,7 @@ do_delete() {
   purge_recovery_queue "$clone"
   local snaps="/api/storage/volumes/$PARENT_UUID/snapshots"
   local snap_uuid
-  snap_uuid="$(ontap_first_uuid "$snaps?name=$snap&fields=uuid" "<$snap-uuid>")"
+  snap_uuid="$(ontap_first_uuid "$snaps?name=$snap&fields=uuid" "<$snap-uuid>")" || exit 1
   if [ -n "$snap_uuid" ]; then
     ontap_ok DELETE "$snaps/$snap_uuid?return_timeout=120"
     wait_count "$snaps?name=$snap&fields=uuid" 0 "snapshot $snap"
@@ -337,7 +356,7 @@ do_verify_clean() {
   ontap_ok GET "$all"
   ontap_note "scanned volumes: $(ontap_jq '", ".join(r.get("name", "") for r in d.get("records", [])) or "(none)"')"
   local status
-  status="$(ontap_call GET "$queue")"
+  status="$(ontap_status GET "$queue")" || exit 1
   if [ "$status" -ge 400 ]; then
     ontap_note "recovery-queue show returned HTTP $status [U26]"; failed=1
   elif [ "$(ontap_jq 'd.get("num_records", len(d.get("records", [])))')" != "0" ]; then

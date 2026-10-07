@@ -48,7 +48,8 @@ ontap_resolve_mgmt_ip() {
   fi
   local ips
   ips="$(aws --region "$REGION" fsx describe-file-systems --file-system-id "$FS_ID" \
-    --query 'FileSystems[0].OntapConfiguration.Endpoints.Management.IpAddresses' --output text)"
+    --query 'FileSystems[0].OntapConfiguration.Endpoints.Management.IpAddresses' --output text)" \
+    || ontap_die 1 "describe-file-systems failed for $FS_ID"
   MGMT_IP="${ips%%[[:space:]]*}"
   if [ -z "$MGMT_IP" ] || [ "$MGMT_IP" = "None" ]; then
     ontap_die 2 "could not resolve a management IP for $FS_ID"
@@ -74,8 +75,10 @@ ontap_login() {
   trap ontap_cleanup EXIT
   local secret
   secret="$(aws --region "$REGION" secretsmanager get-secret-value \
-    --secret-id "$secret_id" --query SecretString --output text)"
-  ONTAP_PW="$(printf '%s' "$secret" | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')"
+    --secret-id "$secret_id" --query SecretString --output text)" \
+    || ontap_die 1 "could not read secret $secret_id"
+  ONTAP_PW="$(printf '%s' "$secret" | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])')" \
+    || { secret=""; ontap_die 1 "secret $secret_id has no readable password"; }
   secret=""
   if [ -z "$ONTAP_PW" ]; then ontap_die 1 "secret $secret_id has no password"; fi
 }
@@ -100,20 +103,42 @@ ontap_call() {
   if [ -n "$body" ]; then
     args+=(-H 'Content-Type: application/json' --data-binary "$body")
   fi
-  # pipefail (set by every caller) makes this pipeline fail when curl fails.
+  # curl writes -o only when data arrives, so without this a failed call would leave the previous
+  # response in place for ontap_jq to parse. Truncated first, a failed call can never be read as
+  # the previous answer.
+  : > "$ONTAP_BODY"
+  # pipefail (set by every caller) makes this pipeline fail when curl fails. The callers check that
+  # status explicitly (ontap_ok, ontap_status), because they run inside $(...), where errexit is off.
   printf 'user = "%s:%s"\n' "$ONTAP_USER" "$esc" | curl "${args[@]}" "$url"
 }
 
-# ontap_ok <METHOD> <path> [json-body]: like ontap_call, but exit 1 on an HTTP status >= 400.
+# ontap_ok <METHOD> <path> [json-body]: like ontap_call, but exit 1 on a transport error (curl
+# failed, or no HTTP status: curl prints 000) and on an HTTP status >= 400.
 ontap_ok() {
   local status
-  status="$(ontap_call "$@")"
+  if ! status="$(ontap_call "$@")" || ! [[ "$status" =~ ^[1-5][0-9][0-9]$ ]]; then
+    echo "${ONTAP_WHO:-ontap}: $1 $2 failed before an HTTP status (curl transport error, status '${status:-}')" >&2
+    exit 1
+  fi
   if [ "$status" -ge 400 ]; then
     echo "${ONTAP_WHO:-ontap}: $1 $2 returned HTTP $status:" >&2
     cat "$ONTAP_BODY" >&2 || true
     echo >&2
     exit 1
   fi
+}
+
+# ontap_status <METHOD> <path> [json-body]: print the HTTP status for a caller that branches on it
+# (404 = absent, an unconfirmed endpoint's error), but exit 1 on a transport error, which has no
+# status to branch on. Same transport check as ontap_ok. Call it as
+# `status="$(ontap_status ...)" || exit 1`.
+ontap_status() {
+  local status
+  if ! status="$(ontap_call "$@")" || ! [[ "$status" =~ ^[1-5][0-9][0-9]$ ]]; then
+    echo "${ONTAP_WHO:-ontap}: $1 $2 failed before an HTTP status (curl transport error, status '${status:-}')" >&2
+    exit 1
+  fi
+  printf '%s' "$status"
 }
 
 # Evaluate a Python expression against the last response body (bound to d). Prints the result.
@@ -151,14 +176,16 @@ ontap_count() {
 
 ontap_svm_uuid() {
   local svm="$1" uuid
-  uuid="$(ontap_first_uuid "/api/svm/svms?name=$svm&fields=uuid" "<svm-uuid>")"
+  # This function itself runs inside $(...), so the inner status is checked explicitly.
+  uuid="$(ontap_first_uuid "/api/svm/svms?name=$svm&fields=uuid" "<svm-uuid>")" || exit 1
   if [ -z "$uuid" ]; then ontap_die 1 "could not resolve the SVM UUID for $svm"; fi
   printf '%s' "$uuid"
 }
 
 ontap_volume_uuid() {
   local volume="$1" svm="$2" uuid
-  uuid="$(ontap_first_uuid "/api/storage/volumes?name=$volume&svm.name=$svm&fields=uuid" "<$volume-uuid>")"
+  uuid="$(ontap_first_uuid "/api/storage/volumes?name=$volume&svm.name=$svm&fields=uuid" "<$volume-uuid>")" \
+    || exit 1
   if [ -z "$uuid" ]; then ontap_die 1 "could not resolve the volume UUID for $volume on $svm"; fi
   printf '%s' "$uuid"
 }

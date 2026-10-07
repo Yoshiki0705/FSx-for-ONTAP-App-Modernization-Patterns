@@ -124,9 +124,18 @@ esac
 # the comment on read_estimate_parameters); the array stays empty and no --parameters is passed.
 PARAMETERS=()
 if [ "$TARGET" = "base" ]; then
+  # Read into a variable first and check the status: a process substitution's exit status is never
+  # checked, so a reader that printed some tokens and then refused a malformed entry (exit 2) would
+  # otherwise deploy with the tokens printed so far and template defaults for the rest.
+  if ! TOKENS="$(read_estimate_parameters "$ESTIMATE")"; then
+    echo "deploy: the estimate's parameters were refused; not deploying" >&2
+    exit 2
+  fi
   while IFS= read -r token; do
     [ -n "$token" ] && PARAMETERS+=("$token")
-  done < <(read_estimate_parameters "$ESTIMATE")
+  done <<EOF
+$TOKENS
+EOF
   if [ "${#PARAMETERS[@]}" -eq 0 ]; then
     echo "deploy: no deployable parameters resolved from estimate; not deploying" >&2
     exit 2
