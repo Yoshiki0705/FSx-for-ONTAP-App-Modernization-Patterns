@@ -11,8 +11,10 @@
 #       [--region ap-northeast-1] [--svm-netbios APPMODSVM01]
 #
 # The instance ids, bucket and SVM NetBIOS name are supplied by the caller; none of the live
-# i-/account/bucket values is hardcoded here. The merged per-behavior JSON carries
-# observed.topology=cross-host for the two-client behaviors (file-locking, write-visibility) and an
+# i-/account/bucket values is hardcoded here. The two-client behaviors (file-locking,
+# write-visibility) run as coordinated pairs with a barrier on the artifacts bucket, and
+# probe_merge.py records observed.topology=cross-host only for a pair whose timelines prove it; each
+# behavior carries an
 # outcome in {measured,error,skipped} per schema appmod-probe/1.
 #
 # When APPMOD_DRY_RUN is set, every aws ssm send-command and s3 cp is printed with its real
@@ -29,8 +31,6 @@ LNX_INSTANCE="${APPMOD_LNX_INSTANCE:-}"
 BUCKET="${APPMOD_ARTIFACTS_BUCKET:-}"
 SVM_NETBIOS="${APPMOD_SVM_NETBIOS:-APPMODSVM01}"
 
-# The two-client behaviors; the merged record forces observed.topology=cross-host for these.
-TWO_CLIENT_BEHAVIORS="file-locking write-visibility"
 
 usage() {
   echo "usage: run-probe.sh --stage <0..3> --run-id <s..> --windows-instance i-... \\" >&2
@@ -94,164 +94,131 @@ send_probe() {
 # JSON) to $OUT_DIR/<side>.json. The SSM output object in S3 is literally named "stdout" under a
 # nested key, so rather than glob for *.json this reads StandardOutputContent after the command
 # reaches a terminal state. A nonzero ResponseCode or a non-Success status is surfaced.
+# collect_probe <command-id> <instance> <file-stem>: wait for the command and write its stdout (the
+# probe's appmod-probe/1 JSON) to $OUT_DIR/<file-stem>.json. The SSM output object in S3 is
+# literally named "stdout" under a nested key, so rather than glob for *.json this reads
+# StandardOutputContent after the command reaches a terminal state. A non-Success status is
+# recorded in FAILED_SIDES and checked before the merge, after every side has been collected.
 collect_probe() {
-  local command_id="$1" instance="$2" side="$3"
+  local command_id="$1" instance="$2" stem="$3"
   if [ -n "$DRY_RUN" ]; then
     echo "DRY-RUN: aws --region $REGION ssm wait command-executed --command-id $command_id --instance-id $instance" >&2
     return 0
   fi
-  # ssm wait command-executed returns nonzero when the command fails; capture status either way.
+  # ssm wait gives up after 100 polls x 5 s and returns nonzero on a failed command; poll on until
+  # the invocation is terminal, then read the status either way.
   aws --region "$REGION" ssm wait command-executed \
     --command-id "$command_id" --instance-id "$instance" 2>/dev/null || true
   local status rc
-  status="$(aws --region "$REGION" ssm get-command-invocation \
-    --command-id "$command_id" --instance-id "$instance" --query 'Status' --output text)"
+  while :; do
+    status="$(aws --region "$REGION" ssm get-command-invocation \
+      --command-id "$command_id" --instance-id "$instance" --query 'Status' --output text)"
+    case "$status" in Pending|InProgress|Delayed) sleep 5 ;; *) break ;; esac
+  done
   rc="$(aws --region "$REGION" ssm get-command-invocation \
     --command-id "$command_id" --instance-id "$instance" --query 'ResponseCode' --output text)"
   aws --region "$REGION" ssm get-command-invocation \
     --command-id "$command_id" --instance-id "$instance" \
-    --query 'StandardOutputContent' --output text | sed 's/\r$//' >"$OUT_DIR/$side.json"
-  echo "run-probe: $side status=$status rc=$rc -> $OUT_DIR/$side.json"
-  # The probe exits 0 whenever it ran (a failing behavior is recorded as outcome "error"), so a
-  # non-Success status means this side produced no record. Recorded here and checked before the
-  # merge, after every side has been collected for diagnosis.
-  COLLECTED_SIDES="$COLLECTED_SIDES $side"
-  if [ "$status" != "Success" ]; then FAILED_SIDES="$FAILED_SIDES $side"; fi
+    --query 'StandardOutputContent' --output text | sed 's/\r$//' >"$OUT_DIR/$stem.json"
+  echo "run-probe: $stem status=$status rc=$rc -> $OUT_DIR/$stem.json"
+  if [ "$status" != "Success" ]; then FAILED_SIDES="$FAILED_SIDES $stem"; fi
 }
-COLLECTED_SIDES=""
 FAILED_SIDES=""
 
-# Windows DocIntake.Probe over SMB (holder). The launcher establishes the appsvc SMB session first
-# (SSM runs as SYSTEM, which otherwise cannot reach the share) and invokes the deployed Probe.
-WIN_CMD_ID="$(send_probe "$WIN_INSTANCE" "AWS-RunPowerShellScript" \
-  "powershell -ExecutionPolicy Bypass -File C:\\appmod\\probe-launch.ps1 -Stage $STAGE -RunId $RUN_ID -Role holder -SvmNetbios $SVM_NETBIOS -Region $REGION" \
-  "windows")"
+# side_command <side> <role> [pair-args]: the launcher command line for one side.
+#   windows    DocIntake.Probe over SMB (the launcher opens the appsvc SMB session first, because
+#              SSM runs as SYSTEM, which otherwise cannot reach the share)
+#   linux-smb  probe_peer.py over the SMB mount (sec=ntlmssp, falling back to krb5)
+#   linux-nfs  probe_peer.py over the NFS mount, as the UNIX user appsvc (stage 1 and later)
+side_command() {
+  local side="$1" role="$2" behavior="${3:-}" sync_id="${4:-}"
+  case "$side" in
+    windows)
+      local extra=""
+      if [ -n "$behavior" ]; then extra=" -PairBehavior $behavior -SyncId $sync_id -Bucket $BUCKET"; fi
+      printf '%s\n' "powershell -ExecutionPolicy Bypass -File C:\\appmod\\probe-launch.ps1 -Stage $STAGE -RunId $RUN_ID -Role $role -SvmNetbios $SVM_NETBIOS -Region $REGION$extra" ;;
+    linux-smb|linux-nfs)
+      local extra=""
+      if [ -n "$behavior" ]; then extra=" --pair-behavior $behavior --sync-id $sync_id --bucket $BUCKET"; fi
+      echo "bash /opt/appmod/probe-launch.sh --store ${side#linux-} --stage $STAGE --role $role --run-id $RUN_ID --region $REGION --svm-netbios $SVM_NETBIOS$extra" ;;
+  esac
+}
+side_instance() { if [ "$1" = "windows" ]; then echo "$WIN_INSTANCE"; else echo "$LNX_INSTANCE"; fi; }
+side_document() { if [ "$1" = "windows" ]; then echo "AWS-RunPowerShellScript"; else echo "AWS-RunShellScript"; fi; }
 
-# Linux probe_peer.py over SMB (contender). The launcher mounts the SMB share as appsvc
-# (sec=ntlmssp, falling back to krb5) and invokes probe_peer.py.
-LNX_SMB_CMD_ID="$(send_probe "$LNX_INSTANCE" "AWS-RunShellScript" \
-  "bash /opt/appmod/probe-launch.sh --store smb --stage $STAGE --role contender --run-id $RUN_ID --region $REGION --svm-netbios $SVM_NETBIOS" \
-  "linux-smb")"
+# 1. Standalone: every side measures all five behaviors on its own. The three single-client
+#    behaviors are compared from these records. The two-client behaviors recorded here are a
+#    single host's view and are never labeled cross-host by the merge.
+SIDES="windows linux-smb"
+if [ "$STAGE" -ge 1 ]; then SIDES="$SIDES linux-nfs"; fi
+# Indexed arrays only: this runs on the operator's machine, where /bin/bash may be 3.2.
+SIDE_CMDS=()
+for side in $SIDES; do
+  SIDE_CMDS+=("$(send_probe "$(side_instance "$side")" "$(side_document "$side")" \
+    "$(side_command "$side" standalone)" "$side")")
+done
+i=0
+for side in $SIDES; do
+  collect_probe "${SIDE_CMDS[$i]}" "$(side_instance "$side")" "$side"
+  i=$((i + 1))
+done
 
-# Stage 1 and later add the NFS mount on the Linux side.
-LNX_NFS_CMD_ID=""
+# 2. Coordinated pairs for the two-client behaviors (design: the stage-0 pairs Windows(SMB)/
+#    Linux(SMB) both ways, plus from stage 1 Windows(SMB)/Linux(NFS) and Linux(NFS)/Windows(SMB)).
+#    Each pair shares a sync id and a barrier on the artifacts bucket; both sides run concurrently.
+#    The manifest records which file carries which side and role, for the merge to verify.
+PAIRS=(
+  "file-locking windows holder linux-smb contender"
+  "file-locking linux-smb holder windows contender"
+  "write-visibility windows writer linux-smb reader"
+  "write-visibility linux-smb writer windows reader"
+)
 if [ "$STAGE" -ge 1 ]; then
-  LNX_NFS_CMD_ID="$(send_probe "$LNX_INSTANCE" "AWS-RunShellScript" \
-    "bash /opt/appmod/probe-launch.sh --store nfs --stage $STAGE --role reader --run-id $RUN_ID --region $REGION --svm-netbios $SVM_NETBIOS" \
-    "linux-nfs")"
+  PAIRS+=(
+    "file-locking windows holder linux-nfs contender"
+    "file-locking linux-nfs holder windows contender"
+    "write-visibility windows writer linux-nfs reader"
+    "write-visibility linux-nfs writer windows reader"
+  )
 fi
-
+MANIFEST="$OUT_DIR/pairs-manifest.tsv"
+: >"$MANIFEST"
 echo "run-probe: role pairs holder/contender (file-locking), writer/reader (write-visibility)"
-echo "run-probe: record each host NTP offset; a difference smaller than the offset is 'no difference'"
-
-# Wait for each command to finish and collect its stdout as the side's JSON.
-collect_probe "$WIN_CMD_ID" "$WIN_INSTANCE" "windows"
-collect_probe "$LNX_SMB_CMD_ID" "$LNX_INSTANCE" "linux-smb"
-if [ "$STAGE" -ge 1 ] && [ -n "$LNX_NFS_CMD_ID" ]; then
-  collect_probe "$LNX_NFS_CMD_ID" "$LNX_INSTANCE" "linux-nfs"
-fi
-# Merge the collected per-host JSON into one per-behavior record. Under dry-run no command ran, so a
-# tiny in-script fixture pair is merged instead, which still proves the merge forces
-# topology=cross-host on the two-client behaviors and keeps the three-valued outcome.
-merge_results() {
-  if [ -n "$DRY_RUN" ]; then
-    COLLECTED_SIDES="windows linux-smb"
-    cat >"$OUT_DIR/windows.json" <<EOF
-{"schema":"appmod-probe/1","run_id":"$RUN_ID","stage":$STAGE,"role":"holder","behaviors":[
-  {"id":"file-locking","outcome":"measured","observed":{"topology":"single-host","denied":true}},
-  {"id":"write-visibility","outcome":"measured","observed":{"topology":"single-host","delay_ms":12}}]}
-EOF
-    cat >"$OUT_DIR/linux-smb.json" <<EOF
-{"schema":"appmod-probe/1","run_id":"$RUN_ID","stage":$STAGE,"role":"contender","behaviors":[
-  {"id":"file-locking","outcome":"measured","observed":{"topology":"single-host","denied":true}},
-  {"id":"write-visibility","outcome":"measured","observed":{"topology":"single-host","delay_ms":12}}]}
-EOF
-  fi
-  APPMOD_RUN_ID="$RUN_ID" APPMOD_STAGE="$STAGE" APPMOD_OUT_DIR="$OUT_DIR" \
-  APPMOD_EXPECTED_SIDES="$COLLECTED_SIDES" \
-  APPMOD_TWO_CLIENT="$TWO_CLIENT_BEHAVIORS" python3 - <<'PY'
-import json
-import os
-
-out_dir = os.environ["APPMOD_OUT_DIR"]
-run_id = os.environ["APPMOD_RUN_ID"]
-stage = int(os.environ["APPMOD_STAGE"])
-two_client = set(os.environ["APPMOD_TWO_CLIENT"].split())
-
-# Only the sides this run collected are merged. Globbing *.json picked up every other record in the
-# run directory (the b1 boundary record and both inventories share it), which listed them in
-# merged_from and would have merged any of them that carried a behaviors key (live 2026-10-07).
-expected = os.environ.get("APPMOD_EXPECTED_SIDES", "").split()
-sides = {}
-for side_name in expected:
-    path = os.path.join(out_dir, f"{side_name}.json")
-    try:
-        record = json.load(open(path, encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        continue
-    if record.get("schema") == "appmod-probe/1":
-        sides[os.path.basename(path)] = record
-
-# Every side collected in this run must have produced a readable record. A side silently skipped
-# here would leave a one-sided merge that is still labeled cross-host.
-unreadable = [s for s in expected if f"{s}.json" not in sides]
-if unreadable:
-    raise SystemExit(
-        "run-probe: no readable appmod-probe/1 record from: " + ", ".join(unreadable)
-        + "; not merging"
-    )
-
-# Collect every behavior id seen across the collected sides.
-behavior_ids = []
-for side in sides.values():
-    for b in side.get("behaviors", []):
-        if b.get("id") not in behavior_ids:
-            behavior_ids.append(b["id"])
-
-OUTCOMES = {"measured", "error", "skipped"}
-merged = []
-for bid in behavior_ids:
-    per_side = {}
-    outcome = "measured"
-    for name, side in sides.items():
-        for b in side.get("behaviors", []):
-            if b.get("id") == bid:
-                side_outcome = b.get("outcome", "error")
-                if side_outcome not in OUTCOMES:
-                    side_outcome = "error"
-                # error wins over skipped wins over measured when the two sides disagree.
-                if side_outcome == "error":
-                    outcome = "error"
-                elif side_outcome == "skipped" and outcome != "error":
-                    outcome = "skipped"
-                per_side[name] = b.get("observed", {})
-    observed = {"per_side": per_side}
-    # The two-client behaviors are cross-host by construction of this merge.
-    if bid in two_client:
-        observed["topology"] = "cross-host"
-    else:
-        topologies = {v.get("topology") for v in per_side.values() if isinstance(v, dict)}
-        observed["topology"] = topologies.pop() if len(topologies) == 1 else "cross-host"
-    merged.append({"id": bid, "outcome": outcome, "observed": observed})
-
-record = {
-    "schema": "appmod-probe/1",
-    "run_id": run_id,
-    "stage": stage,
-    "merged_from": sorted(sides),
-    "behaviors": merged,
-}
-path = os.path.join(out_dir, "merged.json")
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(record, handle, indent=2)
-print(f"run-probe: merged {len(merged)} behavior(s) from {len(sides)} side(s) into {path}")
-PY
-}
+n=0
+for spec in "${PAIRS[@]}"; do
+  n=$((n + 1))
+  read -r behavior s1 r1 s2 r2 <<<"$spec"
+  sync_id="$RUN_ID-p$n"
+  f1="pair-$n-$s1-$r1"
+  f2="pair-$n-$s2-$r2"
+  c1="$(send_probe "$(side_instance "$s1")" "$(side_document "$s1")" \
+    "$(side_command "$s1" "$r1" "$behavior" "$sync_id")" "$f1")"
+  c2="$(send_probe "$(side_instance "$s2")" "$(side_document "$s2")" \
+    "$(side_command "$s2" "$r2" "$behavior" "$sync_id")" "$f2")"
+  collect_probe "$c1" "$(side_instance "$s1")" "$f1"
+  collect_probe "$c2" "$(side_instance "$s2")" "$f2"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "$behavior" "$sync_id" \
+    "$s1" "$r1" "$f1.json" "$s2" "$r2" "$f2.json" >>"$MANIFEST"
+done
 
 if [ -n "$FAILED_SIDES" ]; then
   echo "run-probe: the probe command did not succeed on:$FAILED_SIDES; not merging" >&2
   echo "run-probe: each side's output is kept under $OUT_DIR/ for diagnosis" >&2
   exit 1
 fi
-merge_results
+
+# 3. Merge. Under dry-run no command ran, so a fixture with standalone sides only is merged, which
+#    proves the merge does NOT label the two-client behaviors cross-host without a proven pair.
+if [ -n "$DRY_RUN" ]; then
+  for side in $SIDES; do
+    cat >"$OUT_DIR/$side.json" <<EOF
+{"schema":"appmod-probe/1","run_id":"$RUN_ID","stage":$STAGE,"role":"standalone","behaviors":[
+  {"id":"file-locking","outcome":"measured","observed":{"topology":"cross-host","exclusive_open":true}},
+  {"id":"write-visibility","outcome":"measured","observed":{"topology":"cross-host","marker":"m"}}]}
+EOF
+  done
+  : >"$MANIFEST"
+fi
+python3 "$(dirname "${BASH_SOURCE[0]}")/probe_merge.py" --out-dir "$OUT_DIR" --run-id "$RUN_ID" \
+  --stage "$STAGE" --sides "$SIDES" --pairs "$MANIFEST"
 echo "run-probe: coordination complete for stage $STAGE run $RUN_ID"

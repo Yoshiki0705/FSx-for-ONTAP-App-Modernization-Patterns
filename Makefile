@@ -122,7 +122,7 @@ links: ## 内部リンクの解決
 # fails when a test file on disk is not reached by this target.
 TEST_DIRS := scripts/tests
 PY_UNITTEST := tools.test_ai_style scripts.tests.test_estimate scripts.tests.test_readonly_scripts \
-               scripts.tests.test_reuse_permutations
+               scripts.tests.test_reuse_permutations scripts.tests.test_probe_merge
 
 .PHONY: test
 test: ## 検出器の unittest、スクリプトの単体テスト、ガード・フック・シェルの自己テスト

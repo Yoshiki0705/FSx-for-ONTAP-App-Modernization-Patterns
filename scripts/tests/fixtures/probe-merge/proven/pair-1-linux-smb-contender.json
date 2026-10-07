@@ -1,0 +1,37 @@
+{
+ "schema": "appmod-probe/1",
+ "run_id": "s1-fixture",
+ "stage": 1,
+ "role": "contender",
+ "host": {
+  "os": "linux",
+  "name": "lnxhost",
+  "ntp_offset_ms": 0.3
+ },
+ "behaviors": [
+  {
+   "id": "file-locking",
+   "outcome": "measured",
+   "observed": {
+    "topology": "pending-merge",
+    "sync": {
+     "attempt_started_at": "2026-10-07T16:00:02.000Z",
+     "attempt_ended_at": "2026-10-07T16:00:02.050Z",
+     "attempts": {
+      "open_read": {
+       "ok": false,
+       "error": "PermissionError",
+       "errno": 13
+      }
+     },
+     "after_release": {
+      "ok": true
+     },
+     "sync_id": "s1-fixture-p1",
+     "role": "contender"
+    }
+   },
+   "error_type": null
+  }
+ ]
+}

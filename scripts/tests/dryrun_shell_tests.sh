@@ -369,21 +369,23 @@ check_contains "run-probe waits for the command before collecting" \
   "ssm wait command-executed" "$RP_OUT"
 check_contains "run-probe merges the two sides" \
   "merged 2 behavior(s)" "$RP_OUT"
-# The merged record forces topology=cross-host on the two-client behaviors.
+check_contains "run-probe runs coordinated pairs with a shared sync id and the bucket" \
+  "--pair-behavior file-locking --sync-id s1-testUTC-p5 --bucket appmod-artifacts-example" "$RP_OUT"
+# With no proven pair, the merge must NOT label the two-client behaviors cross-host.
 if python3 - <<'PY'
 import json, sys
 d = json.load(open(".private/runs/s1-testUTC/merged.json", encoding="utf-8"))
 by = {b["id"]: b for b in d["behaviors"]}
 ok = all(
-    by[k]["observed"]["topology"] == "cross-host" for k in ("file-locking", "write-visibility")
+    by[k]["observed"]["topology"] == "not-comparable" for k in ("file-locking", "write-visibility")
 ) and all(b["outcome"] in {"measured", "error", "skipped"} for b in d["behaviors"]) \
   and d["schema"] == "appmod-probe/1"
 sys.exit(0 if ok else 1)
 PY
 then
-  echo "ok: run-probe merged record is cross-host, three-valued, schema appmod-probe/1"
+  echo "ok: run-probe merge does not label unproven two-client behaviors cross-host"
 else
-  echo "FAIL: run-probe merged record missing cross-host/outcome/schema" >&2
+  echo "FAIL: run-probe merge labeled an unproven two-client behavior cross-host" >&2
   FAILURES=$((FAILURES + 1))
 fi
 rm -rf .private/runs/s1-testUTC

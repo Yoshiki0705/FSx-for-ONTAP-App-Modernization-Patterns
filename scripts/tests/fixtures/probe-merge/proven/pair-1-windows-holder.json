@@ -1,0 +1,28 @@
+{
+ "schema": "appmod-probe/1",
+ "run_id": "s1-fixture",
+ "stage": 1,
+ "role": "holder",
+ "host": {
+  "os": "windows",
+  "name": "WINHOST",
+  "ntp_offset_ms": 0.3
+ },
+ "behaviors": [
+  {
+   "id": "file-locking",
+   "outcome": "measured",
+   "observed": {
+    "topology": "pending-merge",
+    "sync": {
+     "lock": "FileShare.None",
+     "lock_acquired_at": "2026-10-07T16:00:00.000Z",
+     "lock_released_at": "2026-10-07T16:00:05.000Z",
+     "sync_id": "s1-fixture-p1",
+     "role": "holder"
+    }
+   },
+   "error_type": null
+  }
+ ]
+}

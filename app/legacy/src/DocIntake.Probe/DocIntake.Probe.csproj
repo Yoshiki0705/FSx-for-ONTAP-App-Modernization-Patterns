@@ -32,6 +32,7 @@
     <Reference Include="System.Configuration" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="PairProbe.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="ProbeConfig.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
