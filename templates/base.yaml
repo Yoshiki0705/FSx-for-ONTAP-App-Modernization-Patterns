@@ -12,6 +12,19 @@ AWSTemplateFormatVersion: '2010-09-09'
 # (AD, SVM, domain-join, security-group and client-bootstrap shapes), reduced to a single SVM and a
 # single NTFS volume per the design's fixed-value table.
 #
+# Deliberate deviation from the original design: the design assumed an EXISTING VPC. The real
+# verification account is shared, so a no-parameter deploy now builds a fully DEDICATED new
+# environment (new VPC + two subnets across two AZs + internet gateway/route + the endpoints +
+# a new directory). Five resource kinds are switchable between "create new" (the default) and
+# "reuse an existing one by ID": VPC, subnets, the S3 gateway endpoint, the interface endpoints,
+# and the AWS Managed Microsoft AD directory. Each has a Create<X> flag (default true) and an
+# existing-ID parameter; reuse activates only when the existing ID is supplied AND Create<X> is
+# false. Everything else is ALWAYS created new and never switchable: security groups, IAM roles,
+# the artifacts bucket, the file system / SVM / volume, and the two EC2 instances.
+#
+# Only the all-new combination is deployed this run. The reuse combinations are checked STATICALLY
+# (cfn-lint + cfn-guard) via the fixtures under guard/reuse/, never deployed.
+#
 # Fixed values that MUST NOT become parameters (held by cfn-guard appmod.guard): DeploymentType
 # SINGLE_AZ_1, StorageCapacity 1024 GiB, ThroughputCapacity 128 MBps, the appdata volume's NTFS
 # SecurityStyle, SnapshotPolicy none, and DeletionPolicy + UpdateReplacePolicy Retain on appdata.
@@ -27,20 +40,41 @@ Description: >-
   export policy rules, NTFS ACEs and name mappings are set by the ONTAP REST scripts, not here.
 
 Metadata:
+  # W1030 is suppressed for this template only. The create-or-reuse pattern gives every Existing<X>
+  # parameter an empty-string default (empty means "create new"), and cfn-lint resolves that empty
+  # default against the EC2 VPC/Subnet ID format on the reuse branch of each !If. That is a false
+  # positive here: the reuse branch is reached only when a real ID is supplied, which the
+  # AllowedPattern on each Existing<X> parameter enforces.
+  cfn-lint:
+    config:
+      ignore_checks:
+        - W1030
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: Network
+          default: Network (VPC and subnets - create new or reuse by ID)
         Parameters:
-          - VpcId
-          - PrimarySubnetId
-          - SecondAzSubnetId
+          - CreateVpc
+          - ExistingVpcId
+          - VpcCidr
+          - CreateSubnets
+          - ExistingPrimarySubnetId
+          - ExistingSecondAzSubnetId
+          - PrimarySubnetCidr
+          - SecondAzSubnetCidr
+      - Label:
+          default: Network (endpoints and egress)
+        Parameters:
           - EgressMode
+          - CreateInterfaceEndpoints
           - CreateS3GatewayEndpoint
           - RouteTableIds
       - Label:
-          default: Active Directory
+          default: Active Directory (create new or reuse by ID)
         Parameters:
+          - CreateDirectory
+          - ExistingDirectoryId
+          - ExistingDirectoryDnsIps
           - DomainName
           - DomainShortName
           - AdAdminSecretName
@@ -71,33 +105,88 @@ Parameters:
       Lower-case prefix for resource names and the artifacts bucket. The SVM and volume names derive
       from it with hyphens removed, because ONTAP accepts only alphanumerics and underscores there.
 
-  VpcId:
-    Type: AWS::EC2::VPC::Id
+  # ---- VPC: create new (default) or reuse an existing one by ID ----
+  CreateVpc:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
     Description: >-
-      Existing VPC. This template creates no VPC, subnet, route table or NAT gateway. Run
-      scripts/preflight.sh --phase network against it first to choose EgressMode and
-      CreateS3GatewayEndpoint.
+      true (default): create a dedicated VPC with two subnets across two AZs, an internet gateway
+      and route, and DNS support/hostnames on. false: reuse the VPC named in ExistingVpcId. When
+      false you almost always set CreateSubnets false too and supply the existing subnet IDs.
 
-  PrimarySubnetId:
-    Type: AWS::EC2::Subnet::Id
+  ExistingVpcId:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(vpc-[0-9a-f]{8,}|)$'
     Description: >-
-      Subnet for the file system, both clients and (in stage 3) the Lambda ENIs. Single-AZ places
-      the SMB and NFS endpoints here.
+      Existing VPC ID to reuse. Required when CreateVpc is false; leave empty when CreateVpc is
+      true. Run scripts/preflight.sh --phase network --vpc-id <id> against it first.
 
-  SecondAzSubnetId:
-    Type: AWS::EC2::Subnet::Id
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16  # example CIDR; change to one that does not overlap your network
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    Description: CIDR for the dedicated VPC. Used only when CreateVpc is true.
+
+  # ---- Subnets: create new (default) or reuse existing ones by ID ----
+  CreateSubnets:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
     Description: >-
-      A second subnet in a DIFFERENT Availability Zone, used only by AWS Managed Microsoft AD, which
-      always deploys two domain controllers across two AZs. The file system stays Single-AZ.
+      true (default): create the primary subnet and a second subnet in a different AZ. false: reuse
+      ExistingPrimarySubnetId and ExistingSecondAzSubnetId. AWS Managed Microsoft AD requires two
+      subnets across two AZs; the file system stays Single-AZ in the primary subnet.
+
+  ExistingPrimarySubnetId:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(subnet-[0-9a-f]{8,}|)$'
+    Description: >-
+      Existing primary subnet (file system, both clients, stage-3 Lambda ENIs). Required when
+      CreateSubnets is false.
+
+  ExistingSecondAzSubnetId:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(subnet-[0-9a-f]{8,}|)$'
+    Description: >-
+      Existing subnet in a DIFFERENT AZ, used only by AWS Managed Microsoft AD. Required when
+      CreateSubnets is false.
+
+  PrimarySubnetCidr:
+    Type: String
+    Default: 10.0.0.0/24  # example; must fall within VpcCidr
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    Description: CIDR for the created primary subnet. Used only when CreateSubnets is true.
+
+  SecondAzSubnetCidr:
+    Type: String
+    Default: 10.0.1.0/24  # example; must fall within VpcCidr and sit in a different AZ
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    Description: CIDR for the created second-AZ subnet. Used only when CreateSubnets is true.
 
   EgressMode:
     Type: String
     Default: endpoints
     AllowedValues: [nat, endpoints]
     Description: >-
-      endpoints: create interface VPC endpoints for Directory Service, FSx for ONTAP, Systems Manager
-      (ssm, ssmmessages, ec2messages) and Secrets Manager in the primary subnet. nat: create none,
-      for a VPC that already has a NAT gateway or those endpoints. preflight.sh recommends a value.
+      endpoints: reach the ds, fsx, ssm, ssmmessages, ec2messages and secretsmanager APIs through
+      interface VPC endpoints in the primary subnet. nat: reach them through a NAT gateway (the
+      dedicated VPC does NOT create one; use nat only against a reused VPC that already has egress).
+      Interface endpoints are created only when EgressMode is endpoints AND CreateInterfaceEndpoints
+      is true (see CreateInterfaceEndpoints for the precedence).
+
+  CreateInterfaceEndpoints:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      true (default): create the six interface endpoints when EgressMode is endpoints. false: reuse
+      interface endpoints that already exist in the VPC (set this when reusing a VPC that already
+      carries them). Precedence: endpoints are created only when EgressMode=endpoints AND this is
+      true. When EgressMode=nat this flag has no effect and no interface endpoint is created.
 
   CreateS3GatewayEndpoint:
     Type: String
@@ -107,13 +196,39 @@ Parameters:
       Create an S3 gateway endpoint so that a VPC-origin FSx for ONTAP S3 Access Point (stage 3) is
       reached as VPC traffic. Created regardless of EgressMode. Set false only when the VPC already
       has an S3 gateway endpoint on the primary subnet's route tables; preflight.sh detects that.
+      This is the per-kind reuse switch for the S3 gateway endpoint.
 
   RouteTableIds:
     Type: CommaDelimitedList
     Default: ''
     Description: >-
-      Route table IDs to attach the S3 gateway endpoint to. Required when CreateS3GatewayEndpoint is
-      true. preflight.sh prints the route tables associated with the primary subnet.
+      Route table IDs to attach the S3 gateway endpoint to, when reusing a VPC (CreateVpc false).
+      Leave empty when CreateVpc is true: the endpoint then attaches to the route table this
+      template creates. Required when CreateS3GatewayEndpoint is true and CreateVpc is false.
+      preflight.sh prints the route tables associated with the primary subnet.
+
+  # ---- AWS Managed Microsoft AD: create new (default) or reuse an existing directory by ID ----
+  CreateDirectory:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      true (default): create an AWS Managed Microsoft AD (Standard) directory. false: reuse the
+      directory named in ExistingDirectoryId and its ExistingDirectoryDnsIps. DomainName,
+      DomainShortName and OrganizationalUnitDistinguishedName must match the reused directory.
+
+  ExistingDirectoryId:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(d-[0-9a-f]{10}|)$'
+    Description: Existing directory ID (d-xxxxxxxxxx) to reuse. Required when CreateDirectory is false.
+
+  ExistingDirectoryDnsIps:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: >-
+      The two domain controller IP addresses of the reused directory, for the SVM join and the SSM
+      domain-join association. Required when CreateDirectory is false. Example: 10.0.x.x,10.0.x.x.
 
   DomainName:
     Type: String
@@ -121,7 +236,7 @@ Parameters:
     AllowedPattern: '^([a-zA-Z0-9]+[\.-])+([a-zA-Z0-9])+$'
     Description: >-
       Fully qualified domain name for the directory. Resolves inside the VPC only; it does not need
-      to be publicly resolvable.
+      to be publicly resolvable. When CreateDirectory is false this must match the reused directory.
 
   DomainShortName:
     Type: String
@@ -200,16 +315,141 @@ Rules:
         AssertDescription: This stack is validated only in ap-northeast-1 (R8.1).
 
 Conditions:
-  MakeClientEndpoints: !Equals [!Ref EgressMode, endpoints]
+  # Per-resource-kind reuse switches. Each resource of a switchable kind is created when its
+  # Create<X> flag is true, and reused (referenced by the supplied existing ID) when it is false.
+  MakeVpc: !Equals [!Ref CreateVpc, 'true']
+  MakeSubnets: !Equals [!Ref CreateSubnets, 'true']
+  # A dedicated new VPC always creates its own subnets and route associations. Reusing subnets from
+  # a VPC this template just created is not a supported combination (CreateVpc true requires
+  # CreateSubnets true); this condition gates the created route associations on both being true.
+  MakeVpcAndSubnets: !And
+    - !Equals [!Ref CreateVpc, 'true']
+    - !Equals [!Ref CreateSubnets, 'true']
+  MakeDirectory: !Equals [!Ref CreateDirectory, 'true']
+  # Interface endpoints: created only when egress is endpoints AND the create switch is on.
+  # EgressMode=nat (or CreateInterfaceEndpoints=false) suppresses them. This is the documented
+  # precedence between EgressMode and the per-kind interface-endpoint switch.
+  MakeClientEndpoints: !And
+    - !Equals [!Ref EgressMode, endpoints]
+    - !Equals [!Ref CreateInterfaceEndpoints, 'true']
   MakeS3GatewayEndpoint: !Equals [!Ref CreateS3GatewayEndpoint, 'true']
   FsxSecretGivenAsArn: !Equals [!Select [0, !Split [':', !Ref FsxAdminSecretName]], 'arn']
   AdSecretGivenAsArn: !Equals [!Select [0, !Split [':', !Ref AdAdminSecretName]], 'arn']
 
 Resources:
 
-  # ------------------------------------------------------------------ directory
+  # ------------------------------------------------------------------ dedicated VPC (CreateVpc)
+  #
+  # Created only when CreateVpc is true (the default). The minimum a seamless AWS Managed Microsoft
+  # AD domain join and AWS Systems Manager need: a VPC with DNS support and hostnames on, two
+  # subnets in two AZs, an internet gateway and a default route so SSM and the AD join reach the
+  # AWS APIs when EgressMode=endpoints is not relied on. (Interface endpoints still carry the
+  # ds/fsx/ssm/secretsmanager traffic privately; the IGW route is the baseline egress for anything
+  # not fronted by an endpoint. The dedicated VPC does not create a NAT gateway, so EgressMode=nat
+  # is meaningful only against a reused VPC that already has one.)
+
+  Vpc:
+    Condition: MakeVpc
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-vpc'
+        - Key: appmod
+          Value: base
+
+  InternetGateway:
+    Condition: MakeVpc
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-igw'
+        - Key: appmod
+          Value: base
+
+  InternetGatewayAttachment:
+    Condition: MakeVpc
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # Created when CreateSubnets is true. AWS Managed Microsoft AD requires two subnets across two
+  # AZs; the first two AZs in the region are selected with Fn::GetAZs so no AZ name is pinned.
+  PrimarySubnet:
+    Condition: MakeSubnets
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
+      CidrBlock: !Ref PrimarySubnetCidr
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-primary'
+        - Key: appmod
+          Value: base
+
+  SecondAzSubnet:
+    Condition: MakeSubnets
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
+      CidrBlock: !Ref SecondAzSubnetCidr
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-second-az'
+        - Key: appmod
+          Value: base
+
+  RouteTable:
+    Condition: MakeVpc
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamePrefix}-rt'
+        - Key: appmod
+          Value: base
+
+  DefaultRoute:
+    Condition: MakeVpc
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Both created subnets associate with the created route table. These exist only when both the VPC
+  # and the subnets are created new (reuse paths bring their own associations).
+  PrimarySubnetRouteAssociation:
+    Condition: MakeVpcAndSubnets
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref PrimarySubnet
+
+  SecondAzSubnetRouteAssociation:
+    Condition: MakeVpcAndSubnets
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref SecondAzSubnet
+
+  # ------------------------------------------------------------------ directory (CreateDirectory)
 
   Directory:
+    Condition: MakeDirectory
     Type: AWS::DirectoryService::MicrosoftAD
     Properties:
       Name: !Ref DomainName
@@ -219,10 +459,10 @@ Resources:
       Edition: Standard
       Password: !Sub '{{resolve:secretsmanager:${AdAdminSecretName}:SecretString:password}}'
       VpcSettings:
-        VpcId: !Ref VpcId
+        VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
         SubnetIds:
-          - !Ref PrimarySubnetId
-          - !Ref SecondAzSubnetId
+          - !If [MakeSubnets, !Ref PrimarySubnet, !Ref ExistingPrimarySubnetId]
+          - !If [MakeSubnets, !Ref SecondAzSubnet, !Ref ExistingSecondAzSubnetId]
 
   # ------------------------------------------------------------------ security groups
 
@@ -230,7 +470,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Windows and Linux clients for the app-modernization base stack. No inbound rules.
-      VpcId: !Ref VpcId
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
       # Egress enumerated by port rather than left as all-protocols. The destination CIDR stays
       # 0.0.0.0/0 on rules that leave the VPC because a template cannot portably discover the VPC
       # CIDR or the S3 prefix list; narrow those to the VPC CIDR and the S3 prefix list in a
@@ -365,7 +605,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: FSx for ONTAP file system for the app-modernization base stack.
-      VpcId: !Ref VpcId
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
       # The SVM reaches the domain controllers for the join and, afterwards, for SMB authentication
       # and AD identity resolution. Enumerated for the same reason as the client group.
       SecurityGroupEgress:
@@ -442,7 +682,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Interface endpoints for the app-modernization base stack.
-      VpcId: !Ref VpcId
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443
@@ -465,12 +705,12 @@ Resources:
     Condition: MakeClientEndpoints
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref VpcId
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ds'
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:
-        - !Ref PrimarySubnetId
+        - !If [MakeSubnets, !Ref PrimarySubnet, !Ref ExistingPrimarySubnetId]
       SecurityGroupIds:
         - !Ref ClientEndpointSecurityGroup
 
@@ -478,12 +718,12 @@ Resources:
     Condition: MakeClientEndpoints
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref VpcId
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.fsx'
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:
-        - !Ref PrimarySubnetId
+        - !If [MakeSubnets, !Ref PrimarySubnet, !Ref ExistingPrimarySubnetId]
       SecurityGroupIds:
         - !Ref ClientEndpointSecurityGroup
 
@@ -491,12 +731,12 @@ Resources:
     Condition: MakeClientEndpoints
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref VpcId
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssm'
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:
-        - !Ref PrimarySubnetId
+        - !If [MakeSubnets, !Ref PrimarySubnet, !Ref ExistingPrimarySubnetId]
       SecurityGroupIds:
         - !Ref ClientEndpointSecurityGroup
 
@@ -504,12 +744,12 @@ Resources:
     Condition: MakeClientEndpoints
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref VpcId
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ssmmessages'
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:
-        - !Ref PrimarySubnetId
+        - !If [MakeSubnets, !Ref PrimarySubnet, !Ref ExistingPrimarySubnetId]
       SecurityGroupIds:
         - !Ref ClientEndpointSecurityGroup
 
@@ -517,12 +757,12 @@ Resources:
     Condition: MakeClientEndpoints
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref VpcId
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ec2messages'
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:
-        - !Ref PrimarySubnetId
+        - !If [MakeSubnets, !Ref PrimarySubnet, !Ref ExistingPrimarySubnetId]
       SecurityGroupIds:
         - !Ref ClientEndpointSecurityGroup
 
@@ -530,12 +770,12 @@ Resources:
     Condition: MakeClientEndpoints
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref VpcId
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:
-        - !Ref PrimarySubnetId
+        - !If [MakeSubnets, !Ref PrimarySubnet, !Ref ExistingPrimarySubnetId]
       SecurityGroupIds:
         - !Ref ClientEndpointSecurityGroup
 
@@ -546,10 +786,15 @@ Resources:
     Condition: MakeS3GatewayEndpoint
     Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref VpcId
+      VpcId: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
       VpcEndpointType: Gateway
-      RouteTableIds: !Ref RouteTableIds
+      # Attach to the route table this template creates (dedicated VPC) or to the supplied route
+      # tables (reused VPC). RouteTableIds must be non-empty when reusing a VPC.
+      RouteTableIds: !If
+        - MakeVpc
+        - [!Ref RouteTable]
+        - !Ref RouteTableIds
 
   SmbFromClients:
     Type: AWS::EC2::SecurityGroupIngress
@@ -792,7 +1037,7 @@ Resources:
       # Fixed by cfn-guard minimum_fsx: 1024 GiB. Not a parameter.
       StorageCapacity: 1024
       SubnetIds:
-        - !Ref PrimarySubnetId
+        - !If [MakeSubnets, !Ref PrimarySubnet, !Ref ExistingPrimarySubnetId]
       SecurityGroupIds:
         - !Ref FileSystemSecurityGroup
       OntapConfiguration:
@@ -828,7 +1073,7 @@ Resources:
       ActiveDirectoryConfiguration:
         NetBiosName: !Ref SvmNetBiosName
         SelfManagedActiveDirectoryConfiguration:
-          DnsIps: !GetAtt Directory.DnsIpAddresses
+          DnsIps: !If [MakeDirectory, !GetAtt Directory.DnsIpAddresses, !Ref ExistingDirectoryDnsIps]
           DomainName: !Ref DomainName
           # Domain Admins is what works for the SVM join. The administrators group AWS delegates in
           # the domain has been measured to have insufficient permissions and leaves the SVM in
@@ -887,7 +1132,7 @@ Resources:
       ImageId: !Ref WindowsAmiId
       InstanceType: !Ref WindowsInstanceType
       IamInstanceProfile: !Ref WindowsInstanceProfile
-      SubnetId: !Ref PrimarySubnetId
+      SubnetId: !If [MakeSubnets, !Ref PrimarySubnet, !Ref ExistingPrimarySubnetId]
       SecurityGroupIds:
         - !Ref ClientSecurityGroup
       BlockDeviceMappings:
@@ -918,7 +1163,7 @@ Resources:
       ImageId: !Ref LinuxAmiId
       InstanceType: !Ref LinuxInstanceType
       IamInstanceProfile: !Ref LinuxInstanceProfile
-      SubnetId: !Ref PrimarySubnetId
+      SubnetId: !If [MakeSubnets, !Ref PrimarySubnet, !Ref ExistingPrimarySubnetId]
       SecurityGroupIds:
         - !Ref ClientSecurityGroup
       BlockDeviceMappings:
@@ -955,10 +1200,10 @@ Resources:
             - !Ref LinuxClient
       Parameters:
         directoryId:
-          - !Ref Directory
+          - !If [MakeDirectory, !Ref Directory, !Ref ExistingDirectoryId]
         directoryName:
           - !Ref DomainName
-        dnsIpAddresses: !GetAtt Directory.DnsIpAddresses
+        dnsIpAddresses: !If [MakeDirectory, !GetAtt Directory.DnsIpAddresses, !Ref ExistingDirectoryDnsIps]
 
 Outputs:
   FileSystemId:
@@ -968,8 +1213,8 @@ Outputs:
       Name: !Sub '${AWS::StackName}-FileSystemId'
 
   DirectoryId:
-    Description: The AWS Managed Microsoft AD directory ID.
-    Value: !Ref Directory
+    Description: The AWS Managed Microsoft AD directory ID (created or reused).
+    Value: !If [MakeDirectory, !Ref Directory, !Ref ExistingDirectoryId]
     Export:
       Name: !Sub '${AWS::StackName}-DirectoryId'
 
@@ -977,7 +1222,22 @@ Outputs:
     Description: >-
       Domain controller addresses. An AD-joined SVM needs these reachable after the join for SMB
       authentication and AD identity resolution.
-    Value: !Join [',', !GetAtt Directory.DnsIpAddresses]
+    Value: !If
+      - MakeDirectory
+      - !Join [',', !GetAtt Directory.DnsIpAddresses]
+      - !Join [',', !Ref ExistingDirectoryDnsIps]
+
+  VpcId:
+    Description: The VPC in use (created or reused). Stage 3 places the Lambda ENIs here.
+    Value: !If [MakeVpc, !Ref Vpc, !Ref ExistingVpcId]
+    Export:
+      Name: !Sub '${AWS::StackName}-VpcId'
+
+  PrimarySubnetId:
+    Description: Primary subnet (file system, both clients, stage-3 Lambda ENIs).
+    Value: !If [MakeSubnets, !Ref PrimarySubnet, !Ref ExistingPrimarySubnetId]
+    Export:
+      Name: !Sub '${AWS::StackName}-PrimarySubnetId'
 
   SvmName:
     Description: Pass this to the ONTAP scripts as --svm.

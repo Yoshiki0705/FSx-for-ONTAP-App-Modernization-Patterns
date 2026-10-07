@@ -168,7 +168,11 @@ expect_exit 2 "integration-clone reject appdata_it_100" bash scripts/ontap/integ
 expect_exit 2 "integration-clone reject other" bash scripts/ontap/integration-clone.sh create --name other
 
 # --- preflight / create-secrets / lock-fsxadmin / teardown: flow runs under dry-run --------------
-expect_exit 0 "preflight network dry-run" bash scripts/preflight.sh --phase network
+expect_exit 0 "preflight network new-vpc dry-run" bash scripts/preflight.sh --phase network
+expect_exit 0 "preflight network new-vpc with cidr dry-run" \
+  bash scripts/preflight.sh --phase network --cidr 10.0.0.0/16
+expect_exit 0 "preflight network existing-vpc dry-run" \
+  bash scripts/preflight.sh --phase network --vpc-id vpc-0123456789abcdef0 --subnet-id subnet-0123456789abcdef0
 expect_exit 0 "preflight secrets dry-run" bash scripts/preflight.sh --phase secrets
 expect_exit 2 "preflight bad phase" bash scripts/preflight.sh --phase bogus
 expect_exit 0 "create-secrets dry-run" bash scripts/create-secrets.sh
