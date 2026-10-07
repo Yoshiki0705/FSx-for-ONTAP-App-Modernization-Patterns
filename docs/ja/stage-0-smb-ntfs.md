@@ -46,11 +46,22 @@ Windows EC2 上の .NET Framework 4.8 アプリが、NTFS セキュリティス�
 - 合成データ `seed/`（6 ファイル）を Windows から SMB で配置し、Windows の目録（相対パス・サイズ・
   SHA-256）を `b0` に採取した。`appsvc` は SMB 経由で全ファイルを読め、SHA-256 は配置元と一致した。
   NTFS ACL は `appsvc` に modify、`appreader` に read と書き込み拒否の ACE を与えた。
-- Probe の 5 つの挙動は Windows（SMB、holder）と Linux（SMB、contender）の 2 台でいずれも
-  `outcome=measured`、`observed.topology=cross-host` で揃った。`path-separator` は Linux の SMB で
+- Probe の 1 台で完結する 3 つの挙動（`case-sensitivity`、`path-separator`、`acl-evaluation`）は、
+  Windows（SMB）と Linux（SMB）の両方で `outcome=measured` だった。`path-separator` は Linux の SMB で
   `\` を含む名前が拒否され（`rejected=true`、`errno=22`）、その拒否自体を観測として記録した。
   これは「Linux では例外なく別名ファイルができる」という事前の予想とは異なる所見で、NFS を足す
   段階 1 との比較が主眼になる。
+
+## 撤回した主張
+
+- 段階 0 の記録は、2 台のクライアントを要する `file-locking` と `write-visibility` についても
+  `observed.topology=cross-host` と書いていた。この主張は撤回する。段階 0 の Probe では各ホストが
+  自分のファイルを独立にロック・書き込みしただけで、2 台の間の相互作用（一方がロック中の他方の
+  アクセス、一方の書き込みが他方に見えるまでの時間）は測っていない。`cross-host` は結果の統合時に
+  付けたラベルで、観測ではなかった。この 2 つの挙動には段階 0 の基準値がない。
+- 2 台の組を同期させた計測は段階 1 で初めて行った（[段階 1](stage-1-multiprotocol.md)）。その時点の
+  環境には NFS の export があるので、SMB 同士の組の結果も段階 1 の構成での値として扱い、段階 0 の
+  基準値には読み替えない。
 
 ## この段階で判明した所見（手順への反映）
 

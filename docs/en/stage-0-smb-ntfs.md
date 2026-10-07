@@ -50,11 +50,24 @@ baseline.
   (relative path, size, SHA-256) was captured into `b0`. `appsvc` can read every file over SMB and
   the SHA-256 values match the source. The NTFS ACLs grant `appsvc` modify and `appreader` read with
   an explicit deny-write ACE.
-- The Probe's five behaviors were all `outcome=measured` with `observed.topology=cross-host` across
-  Windows (SMB, holder) and Linux (SMB, contender). `path-separator` on the Linux SMB client had the
-  `\`-containing name rejected (`rejected=true`, `errno=22`); that rejection itself is recorded as
-  the observation. This differs from the prior prediction that Linux would create a differently
-  named file without an exception, and the comparison with NFS at stage 1 is the point.
+- The three single-client behaviors (`case-sensitivity`, `path-separator`, `acl-evaluation`) were
+  `outcome=measured` on both Windows (SMB) and Linux (SMB). `path-separator` on the Linux SMB client
+  had the `\`-containing name rejected (`rejected=true`, `errno=22`); that rejection itself is
+  recorded as the observation. This differs from the prior prediction that Linux would create a
+  differently named file without an exception, and the comparison with NFS at stage 1 is the point.
+
+## Withdrawn claim
+
+- The stage-0 record also stated `observed.topology=cross-host` for the two-client behaviors
+  `file-locking` and `write-visibility`. That claim is withdrawn. In the stage-0 Probe each host
+  locked or wrote its own file independently; the interaction between the two hosts (one host's
+  access while the other holds a lock, the time until one host's write is visible to the other) was
+  not measured. `cross-host` was a label added when the results were merged, not an observation.
+  These two behaviors have no stage-0 baseline.
+- The coordinated two-client measurement was first made at stage 1
+  ([stage 1](stage-1-multiprotocol.md)). The environment then already had the NFS export, so the
+  SMB-to-SMB pair is also treated as a stage-1 configuration value, not read back as a stage-0
+  baseline.
 
 ## Findings from this stage (folded back into the procedure)
 
