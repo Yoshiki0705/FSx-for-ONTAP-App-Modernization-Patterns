@@ -2,9 +2,10 @@
 """Negative tests for guard/appmod.guard: each fixture must fail its own rule and no other.
 
 cfn-guard proves a rule rejects a bad template only if a bad template is run through it. For each
-guard/tests/fail_<rule>.yaml, this runs `cfn-guard validate` against guard/ and asserts the FAILED
-rules are exactly {<rule>}. It fails if a fixture passes, or fails extra rules, or fails a different
-rule than its name claims.
+guard/tests/fail_<rule>.yaml (or fail_<rule>.<case>.yaml, for a further shape the same rule must
+reject), this runs `cfn-guard validate` against guard/ and asserts the FAILED rules are exactly
+{<rule>}. It fails if a fixture passes, or fails extra rules, or fails a different rule than its
+name claims.
 
 Requires the cfn-guard binary (the same one `make cfn` uses). Run from the repository root:
 
@@ -57,7 +58,8 @@ def main() -> int:
     failures: list[str] = []
     checked = 0
     for fixture in sorted(TESTS_DIR.glob("fail_*.yaml")):
-        expected = fixture.stem[len("fail_") :]
+        # fail_<rule>.<case>.yaml: the part after the first dot names the case, not the rule
+        expected = fixture.stem[len("fail_") :].split(".", 1)[0]
         got = failed_rules(fixture)
         checked += 1
         if got != {expected}:
