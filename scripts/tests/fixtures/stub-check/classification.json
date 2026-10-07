@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "scripts/send-ssm.sh": {
+      "class": "external",
+      "reason": "test fixture: sends an SSM Run Command with aws ssm send-command"
+    }
+  }
+}

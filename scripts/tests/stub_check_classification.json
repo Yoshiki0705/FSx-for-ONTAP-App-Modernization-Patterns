@@ -1,0 +1,73 @@
+{
+  "_comment": "Read by check_no_stub_scripts.py. Every *.sh under scripts/ (scripts/tests/ excluded) needs an entry. external: the real-mode path must invoke aws/curl/gitleaks/atx/git clone/install.sh/pwsh or a wrapper of them. pure: local-only, exempt. fail-closed: real mode must exit non-zero in a real-only branch.",
+  "scripts": {
+    "scripts/aimf/lock-fsxadmin.sh": {
+      "class": "external",
+      "reason": "attaches and detaches the IAM deny policy on the Linux instance role with aws iam"
+    },
+    "scripts/aimf/run-atx.sh": {
+      "class": "fail-closed",
+      "reason": "real mode exits 2 until the atx invocation is verified and recorded (U8-U11)"
+    },
+    "scripts/aimf/setup-workspace.sh": {
+      "class": "external",
+      "reason": "clones the pinned upstream with git clone, runs its install.sh, and runs the gitleaks send-scan self-test"
+    },
+    "scripts/create-secrets.sh": {
+      "class": "external",
+      "reason": "generates passwords and creates the Secrets Manager secrets with aws secretsmanager"
+    },
+    "scripts/deploy.sh": {
+      "class": "external",
+      "reason": "creates and executes the CloudFormation change set with aws cloudformation"
+    },
+    "scripts/inventory.sh": {
+      "class": "pure",
+      "reason": "lists and hashes files under a local mount point; no AWS or ONTAP call"
+    },
+    "scripts/lib/entry-check.sh": {
+      "class": "pure",
+      "reason": "sourced helper that checks the estimate and approval JSON files locally"
+    },
+    "scripts/ontap/check-no-locking.sh": {
+      "class": "external",
+      "reason": "reads every volume's locking fields over ONTAP REST with curl, the password via aws secretsmanager"
+    },
+    "scripts/ontap/integration-clone.sh": {
+      "class": "external",
+      "reason": "creates and deletes snapshots and FlexClones over ONTAP REST through the lib-ontap-rest.sh wrappers"
+    },
+    "scripts/ontap/lib-ontap-rest.sh": {
+      "class": "external",
+      "reason": "sourced ONTAP REST helpers; ontap_call runs curl and ontap_login runs aws secretsmanager"
+    },
+    "scripts/ontap/record-boundary.sh": {
+      "class": "external",
+      "reason": "reads the boundary state over ONTAP REST with curl, the password via aws secretsmanager"
+    },
+    "scripts/ontap/stage0-smb.sh": {
+      "class": "external",
+      "reason": "creates the SMB share, ACLs, directories and REST roles over ONTAP REST with curl"
+    },
+    "scripts/ontap/stage1-nfs.sh": {
+      "class": "external",
+      "reason": "adds the export policy, UNIX users and name mappings over ONTAP REST through the lib-ontap-rest.sh wrappers"
+    },
+    "scripts/preflight.sh": {
+      "class": "external",
+      "reason": "read-only describe and get calls with aws before deploy"
+    },
+    "scripts/probe-launch.sh": {
+      "class": "external",
+      "reason": "reads the SMB credential with aws secretsmanager and bridges probe sync files with aws s3 cp"
+    },
+    "scripts/run-probe.sh": {
+      "class": "external",
+      "reason": "starts the probes with aws ssm send-command and collects results with aws s3 cp"
+    },
+    "scripts/teardown.sh": {
+      "class": "external",
+      "reason": "deletes stacks, volumes, policies and secrets with aws and runs the ONTAP checks over SSM"
+    }
+  }
+}
