@@ -45,9 +45,12 @@ APPROVAL="$TMP/approval.json"
 
 CREATED="$(iso_hours_ago 1)"
 APPROVED="$(iso_now)"
+# The approved all-new deployment parameters, as estimate.py records them. deploy.sh reads this
+# "parameters" object and passes it to create-stack; the 10.90.0.0/16 values are the approved run.
+PARAMS_JSON='[{"ParameterKey":"CreateVpc","ParameterValue":"true"},{"ParameterKey":"CreateSubnets","ParameterValue":"true"},{"ParameterKey":"VpcCidr","ParameterValue":"10.90.0.0/16"},{"ParameterKey":"PrimarySubnetCidr","ParameterValue":"10.90.0.0/24"},{"ParameterKey":"SecondAzSubnetCidr","ParameterValue":"10.90.1.0/24"},{"ParameterKey":"CreateInterfaceEndpoints","ParameterValue":"true"},{"ParameterKey":"CreateS3GatewayEndpoint","ParameterValue":"true"},{"ParameterKey":"CreateDirectory","ParameterValue":"true"},{"ParameterKey":"EgressMode","ParameterValue":"endpoints"}]'
 EST_BASE="$EST_DIR/20260101T000000Z-base.json"
 cat >"$EST_BASE" <<EOF
-{"target": "base", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 72}
+{"target": "base", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 72, "parameters": $PARAMS_JSON}
 EOF
 cat >"$APPROVAL" <<EOF
 [{"target": "base", "approved_at": "$APPROVED", "hours": 72, "estimate_file": "$EST_BASE"}]
@@ -68,6 +71,19 @@ cat >"$APPROVAL" <<EOF
 EOF
 expect_exit 0 "deploy.sh base valid estimate" \
   bash scripts/deploy.sh base --estimate "$EST_DIR/case-valid-base.json" --approved-at "$APPROVED"
+
+# 1b. The valid dry-run create line must carry --parameters with the approved VpcCidr, proving the
+# estimate's parameters reach create-stack rather than the template defaults being used.
+VALID_OUT="$(APPMOD_DRY_RUN=1 bash scripts/deploy.sh base \
+  --estimate "$EST_DIR/case-valid-base.json" --approved-at "$APPROVED" 2>/dev/null)"
+if echo "$VALID_OUT" | grep -q -- "--parameters" \
+  && echo "$VALID_OUT" | grep -q "ParameterKey=VpcCidr,ParameterValue=10.90.0.0/16"; then
+  echo "ok: deploy.sh base dry-run passes --parameters VpcCidr=10.90.0.0/16"
+else
+  echo "FAIL: deploy.sh base dry-run did not pass --parameters VpcCidr=10.90.0.0/16" >&2
+  echo "$VALID_OUT" >&2
+  FAILURES=$((FAILURES + 1))
+fi
 
 # 2. no estimate file
 expect_exit 2 "deploy.sh base missing estimate" \
@@ -125,6 +141,22 @@ json.dump(data,open(path,"w"))
 PY
 expect_exit 2 "deploy.sh base wrong region" \
   bash scripts/deploy.sh base --estimate "$WRONGREGION" --approved-at "$APPROVED"
+
+# 7. estimate WITHOUT a parameters object -> refused (exit 2). Fresh, unused, approved, in-region,
+# target-matched, so it passes the entry check and fails only on the missing parameters object.
+NOPARAMS="$EST_DIR/noparams-base.json"
+cat >"$NOPARAMS" <<EOF
+{"target": "base", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 72}
+EOF
+python3 - "$APPROVAL" "$NOPARAMS" "$APPROVED" <<'PY'
+import json,sys
+path,est,approved=sys.argv[1:4]
+data=json.load(open(path))
+data.append({"target":"base","approved_at":approved,"hours":72,"estimate_file":est})
+json.dump(data,open(path,"w"))
+PY
+expect_exit 2 "deploy.sh base estimate without parameters object" \
+  bash scripts/deploy.sh base --estimate "$NOPARAMS" --approved-at "$APPROVED"
 
 # --- run-atx.sh: same entry check with target=atx -------------------------------------------------
 EST_ATX="$EST_DIR/case-atx.json"

@@ -67,6 +67,125 @@ class ArithmeticTests(unittest.TestCase):
         self.assertEqual(throughput["note"], "not retrieved")
 
 
+class BaseParameterTests(unittest.TestCase):
+    """The base estimate records the exact CloudFormation parameters deploy.sh will pass."""
+
+    def _run_base(self, extra: list[str]) -> tuple[int, dict | None]:
+        """Run --target base into a temp estimates dir; return (exit_code, parameters-or-None)."""
+        with tempfile.TemporaryDirectory() as d:
+            orig = estimate.ESTIMATES_DIR
+            estimate.ESTIMATES_DIR = Path(d) / "estimates"
+            try:
+                code = estimate.main(
+                    [
+                        "--target",
+                        "base",
+                        "--hours",
+                        "72",
+                        "--egress-mode",
+                        "endpoints",
+                        "--price-fixture",
+                        str(FIXTURES / "prices.json"),
+                        "--minimums-fixture",
+                        str(FIXTURES / "minimums_match.json"),
+                        *extra,
+                    ]
+                )
+                written = (
+                    sorted(estimate.ESTIMATES_DIR.glob("*.json"))
+                    if code in (0, 4)
+                    else []
+                )
+                payload = (
+                    json.loads(written[0].read_text(encoding="utf-8"))
+                    if written
+                    else None
+                )
+            finally:
+                estimate.ESTIMATES_DIR = orig
+            return code, payload
+
+    def test_all_new_records_five_switches_and_three_cidrs(self) -> None:
+        # Default all-new config: the 5 Create<X>=true plus the 3 approved CIDRs, as
+        # ParameterKey/ParameterValue pairs.
+        code, payload = self._run_base([])
+        self.assertEqual(code, 0)
+        self.assertIsNotNone(payload)
+        pairs = {p["ParameterKey"]: p["ParameterValue"] for p in payload["parameters"]}
+        for key in (
+            "CreateVpc",
+            "CreateSubnets",
+            "CreateInterfaceEndpoints",
+            "CreateS3GatewayEndpoint",
+            "CreateDirectory",
+        ):
+            self.assertEqual(
+                pairs[key], "true", f"{key} should be true in the all-new config"
+            )
+        self.assertEqual(pairs["VpcCidr"], "10.90.0.0/16")
+        self.assertEqual(pairs["PrimarySubnetCidr"], "10.90.0.0/24")
+        self.assertEqual(pairs["SecondAzSubnetCidr"], "10.90.1.0/24")
+
+    def test_subnet_cidr_outside_vpc_cidr_exits_2(self) -> None:
+        # A /16 "subnet" is not inside a /24 VPC, so containment fails. Both values stay within the
+        # approved dedicated-VPC block so no new address literal is introduced.
+        code, _ = self._run_base(
+            [
+                "--vpc-cidr",
+                "10.90.0.0/24",
+                "--primary-subnet-cidr",
+                "10.90.0.0/16",  # wider than the VPC: not contained
+            ]
+        )
+        self.assertEqual(code, 2)
+
+    def test_create_vpc_false_without_existing_id_exits_2(self) -> None:
+        code, _ = self._run_base(
+            [
+                "--create-vpc",
+                "false",
+                "--create-subnets",
+                "false",
+                # ExistingVpcId deliberately omitted.
+                "--existing-primary-subnet-id",
+                "subnet-0123456789abcdef0",
+                "--existing-second-az-subnet-id",
+                "subnet-0123456789abcdef0",
+            ]
+        )
+        self.assertEqual(code, 2)
+
+    def test_create_directory_false_without_existing_id_exits_2(self) -> None:
+        code, _ = self._run_base(
+            [
+                "--create-directory",
+                "false",
+                # ExistingDirectoryId deliberately omitted.
+                "--existing-directory-dns-ips",
+                "192.0.2.10,192.0.2.11",
+            ]
+        )
+        self.assertEqual(code, 2)
+
+    def test_reuse_config_records_existing_ids(self) -> None:
+        # A reuse config records the Existing* IDs instead of the CIDRs; valid IDs -> exit 0.
+        code, payload = self._run_base(
+            [
+                "--create-directory",
+                "false",
+                "--existing-directory-id",
+                "d-0123456789",
+                "--existing-directory-dns-ips",
+                "192.0.2.10,192.0.2.11",
+            ]
+        )
+        self.assertEqual(code, 0)
+        pairs = {p["ParameterKey"]: p["ParameterValue"] for p in payload["parameters"]}
+        self.assertEqual(pairs["CreateDirectory"], "false")
+        self.assertEqual(pairs["ExistingDirectoryId"], "d-0123456789")
+        self.assertEqual(pairs["ExistingDirectoryDnsIps"], "192.0.2.10,192.0.2.11")
+
+
 class ValidationTests(unittest.TestCase):
     def _args(self, **kw):
         import argparse

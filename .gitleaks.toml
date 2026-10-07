@@ -54,6 +54,10 @@ paths = [
   '''^\.private/''',
   '''^\.kiro/''',
   '''^\.git/''',
+  # Compiled bytecode: gitignored build artifacts, never committed. The scan reads the working
+  # tree, so a .pyc mirrors whatever its source already carries (allowlisted below).
+  '''__pycache__/''',
+  '''\.pyc$''',
   '''-migration-[^/]*/''',
   '''\.gitleaks\.toml$''',
   '''\.gitignore$''',
@@ -64,6 +68,12 @@ paths = [
 
 # Documented example values. Kept narrow on purpose: only the all-zero host address in
 # CIDR form is allowed, so a real address such as 10.1.23.45 still fires. # allow:pii
+# The 10.90.0.0/16 block and its two /24 subnets are the approved dedicated-VPC CIDRs for this
+# verification run (confirmed non-overlapping), recorded as the deployment parameters in
+# estimate.py / deploy.sh and their tests. A concrete host address in that block still fires,
+# because each allowed form ends in /.
 regexes = [
   '''10\.0\.0\.0/''',
+  '''10\.90\.0\.0/''',
+  '''10\.90\.1\.0/''',
 ]
