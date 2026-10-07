@@ -67,13 +67,15 @@ whether the Systems Manager traffic went through the endpoints was not checked.
 
 ## Creation steps and measured duration
 
-> Evidence tier: `verified` (2026-10-07, ap-northeast-1). Times come from the CloudFormation stack
-> events and the approval record.
+> Evidence tier: `verified` (2026-10-07, ap-northeast-1). The approval time (06:07:17 UTC) comes
+> from the approval record. The start and completion times of `appmod-base` were read during the
+> creation session; the stack events were not retained, so the sources behind this document cannot
+> confirm them again.
 
 1. Present an estimate and obtain approval (configuration, time, cost). Its unit prices were re-fetched from the AWS Price List API on 2026-10-07
 2. Create the four secrets (passwords generated, never in argv)
 3. Preflight the network and secrets (read-only)
-4. Create the base stack `appmod-base`. It started at 06:08 UTC and completed at 06:43 UTC, about 35 minutes. Most of that time went to creating the directory and the file system
+4. Create the base stack `appmod-base`. It started at 06:08 UTC and completed at 06:43 UTC, about 35 minutes (not retained). Which resources took the time was not checked, because the per-resource events were not retained
 5. Confirm the SVM domain join by discovered domain controller (not by lifecycle alone)
 6. Confirm no locking on all volumes
 
@@ -120,13 +122,17 @@ Step 11 (the Cost Explorer check on a later day) has not been done yet.
 
 ## Arithmetic estimate of billed hours
 
-> Evidence tier: the times are `verified` (2026-10-07, ap-northeast-1). The amount is arithmetic,
-> not an invoice figure.
+> Evidence tier: the times are `verified` (2026-10-07, ap-northeast-1). The start comes from the
+> approval record and the end from the teardown run log. The amount is arithmetic, not an invoice
+> figure.
 
-The environment existed for about 11.5 hours, from the start of the `appmod-base` creation
-(06:08 UTC) to the end of the deletion (about 17:41 UTC). The approved estimate's unit prices (AWS
-Price List API, 2026-10-07, ap-northeast-1) sum to $0.8015 per hour; times 11.5 hours this is about
-$9.22.
+The start is the approval record's `approved_at` (06:07:17 UTC). Billed resources were created
+after approval, so this start is earlier than the actual creation start. The end is the end of the
+deletion (about 17:41 UTC), and it is a lower bound. The four secrets were deleted at 17:40:58 UTC
+and step 10 then ran at least one more 60-second check, so the actual completion was later.
+The period is about 11.6 hours (11 h 34 min).
+The approved estimate's unit prices (AWS Price List API, 2026-10-07, ap-northeast-1) sum to
+$0.8015 per hour; times 11.6 hours this is about $9.3.
 
 - Per hour: FSx for ONTAP SSD $0.2104, throughput $0.1589, AWS Managed Microsoft AD $0.146, Windows
   EC2 $0.1364, Linux EC2 $0.0544, EBS gp3 $0.0092, interface endpoints $0.084, Secrets Manager $0.0022
