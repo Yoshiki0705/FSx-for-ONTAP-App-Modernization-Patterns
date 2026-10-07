@@ -42,7 +42,7 @@ GUARD_RULES = ROOT / "guard"
 PLACEHOLDERS = {
     "ExistingVpcId": "vpc-0123456789abcdef0",
     "ExistingPrimarySubnetId": "subnet-0123456789abcdef0",
-    "ExistingSecondAzSubnetId": "subnet-0123456789abcdef",
+    "ExistingSecondAzSubnetId": "subnet-0123456789abcdef0",
     "ExistingDirectoryId": "d-0123456789",
     # RFC 5737 TEST-NET-1 documentation addresses: valid-format, not internal (so the gitleaks
     # internal-ip rule does not fire), and never routed to a real host.

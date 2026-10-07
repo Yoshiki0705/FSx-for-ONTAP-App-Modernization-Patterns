@@ -23,7 +23,8 @@ AWSTemplateFormatVersion: '2010-09-09'
 # the artifacts bucket, the file system / SVM / volume, and the two EC2 instances.
 #
 # Only the all-new combination is deployed this run. The reuse combinations are checked STATICALLY
-# (cfn-lint + cfn-guard) via the fixtures under guard/reuse/, never deployed.
+# (cfn-lint + cfn-guard) by scripts/tests/test_reuse_permutations.py, which renders one fixture per
+# permutation into a temp dir from this template and never commits them. Not deployed.
 #
 # Fixed values that MUST NOT become parameters (held by cfn-guard appmod.guard): DeploymentType
 # SINGLE_AZ_1, StorageCapacity 1024 GiB, ThroughputCapacity 128 MBps, the appdata volume's NTFS
