@@ -16,7 +16,7 @@
 #
 # Deletion order (design "削除の順序"):
 #   0  start the stopped Linux EC2 (the Run Command target) and wait until SSM reports it Online,
-#      then stage scripts/ontap/ to the artifacts bucket for the host to run
+#      then stage the tracked files of scripts/ontap/ (git ls-files) to the artifacts bucket
 #   1  check-no-locking.sh over all volumes (stop with exit 3 on any lock or a failed scan)
 #   2  disable the Scheduler schedule and delete appmod-stage3 (detaches the S3 Access Point)
 #   3  confirm 0 S3 Access Point attachments on appdata and on the file system
@@ -28,7 +28,8 @@
 #      artifacts-bucket access) so the base stack can delete the role
 #   8  delete appmod-base and wait for DELETE_COMPLETE
 #   9  delete the four secrets with --force-delete-without-recovery
-#   10 confirm absence by API enumeration (not the stack resource list), 10 tries 60 s apart
+#   10 confirm absence by API enumeration (not the stack resource list), 10 tries 60 s apart;
+#      backups by volume id use --volume-id or the appdata id enumerated in steps 3 and 6
 #   11 next day: confirm in Cost Explorer that billing stopped
 #
 # When APPMOD_DRY_RUN is set together with --apply, every AWS call is printed with its real
@@ -203,8 +204,18 @@ start_linux_and_wait_ssm() {
   if [ -z "$DRY_RUN" ] && [ "$ping" != "Online" ]; then
     die 1 "$LNX_INSTANCE did not reach SSM Online after $i checks (last: ${ping:-none}); nothing deleted"
   fi
-  # Stage the current scripts/ontap/ for the host. Read back from the bucket by the instance role.
-  aws_r s3 cp --recursive --quiet "$HERE/ontap/" "s3://$BUCKET/$STAGE_PREFIX/"
+  # Stage the tracked files of scripts/ontap/ for the host, one by one, so an untracked or scratch
+  # file in that directory is never uploaded. Read back from the bucket by the instance role.
+  local tracked f
+  local root tracked f
+  root="$(cd "$HERE/.." && pwd)"
+  tracked="$(git -C "$root" ls-files -- scripts/ontap)"
+  if [ -z "$tracked" ]; then
+    die 1 "git ls-files lists nothing under scripts/ontap; run teardown.sh from the repository checkout"
+  fi
+  for f in $tracked; do
+    aws_r s3 cp --quiet "$root/$f" "s3://$BUCKET/$STAGE_PREFIX/${f#scripts/ontap/}"
+  done
 }
 
 run_check_no_locking() {
@@ -317,6 +328,34 @@ wait_volume_gone() {
   die 1 "$id is still listed after deletion; check describe-volumes, then re-run"
 }
 
+# delete-volume with SkipFinalBackup=true. A record whose ONTAP volume step 4 already removed may
+# still be listed until the FSx for ONTAP API catches up (unverified); VolumeNotFound from the
+# delete is treated as already gone, and wait_volume_gone confirms it. Any other error stops.
+delete_fsx_volume() {
+  local id="$1" err
+  if [ -n "$DRY_RUN" ]; then
+    aws_r fsx delete-volume --volume-id "$id" --ontap-configuration SkipFinalBackup=true
+    return 0
+  fi
+  err="$(mktemp)"
+  if aws_r fsx delete-volume --volume-id "$id" --ontap-configuration SkipFinalBackup=true 2>"$err"; then
+    rm -f "$err"
+    return 0
+  fi
+  if grep -q "VolumeNotFound" "$err"; then
+    echo "    $id: delete-volume answered VolumeNotFound; treating it as already gone"
+    rm -f "$err"
+    return 0
+  fi
+  cat "$err" >&2
+  rm -f "$err"
+  die 1 "delete-volume $id failed; check describe-volumes, then re-run"
+}
+
+# Set by steps 3 and 6 from the enumerated appdata volume id, so step 10 can check backups by
+# volume id even when --volume-id was not passed.
+APPDATA_ID=""
+
 delete_appdata() {
   # FSx for ONTAP API records of FlexClones (appdata_it_*) go first; the ONTAP side was swept in step 4.
   local leftovers id
@@ -324,7 +363,7 @@ delete_appdata() {
     --query "Volumes[?starts_with(Name, 'appdata_it_')].VolumeId" --output text)"
   if [ "$leftovers" = "None" ]; then leftovers=""; fi
   for id in $leftovers; do
-    aws_r fsx delete-volume --volume-id "$id" --ontap-configuration SkipFinalBackup=true
+    delete_fsx_volume "$id"
     wait_volume_gone "$id"
   done
   local appdata
@@ -333,9 +372,10 @@ delete_appdata() {
     echo "    $TARGET_VOLUME is already gone from $FS_ID"
     return 0
   fi
+  APPDATA_ID="$appdata"
   # ONTAP refuses to delete a volume with S3 Access Points; the AWS API is the only path, and
   # SkipFinalBackup=true keeps the delete from leaving a billed final backup.
-  aws_r fsx delete-volume --volume-id "$appdata" --ontap-configuration SkipFinalBackup=true
+  delete_fsx_volume "$appdata"
   wait_volume_gone "$appdata"
 }
 
@@ -403,8 +443,10 @@ residuals() {
   [ -z "$v" ] || [ "$v" = "None" ] || out="$out volume:$v"
   v="$(aws_r fsx describe-backups --filters "Name=file-system-id,Values=$FS_ID" --query 'Backups[].BackupId' --output text)"
   [ -z "$v" ] || [ "$v" = "None" ] || out="$out backup(fs):$v"
-  if [ -n "$VOLUME_ID" ]; then
-    v="$(aws_r fsx describe-backups --filters "Name=volume-id,Values=$VOLUME_ID" --query 'Backups[].BackupId' --output text)"
+  # H4: backups by volume id as well. confirm_absence reports when no appdata id is known.
+  local vid="${VOLUME_ID:-$APPDATA_ID}"
+  if [ -n "$vid" ]; then
+    v="$(aws_r fsx describe-backups --filters "Name=volume-id,Values=$vid" --query 'Backups[].BackupId' --output text)"
     [ -z "$v" ] || [ "$v" = "None" ] || out="$out backup(volume):$v"
   fi
   v="$(aws_r fsx describe-s3-access-point-attachments --filters "Name=file-system-id,Values=$FS_ID" \
@@ -438,6 +480,12 @@ residuals() {
 
 confirm_absence() {
   local i left=""
+  if [ -n "${VOLUME_ID:-$APPDATA_ID}" ]; then
+    echo "    backup(volume): checking describe-backups by volume id ${VOLUME_ID:-$APPDATA_ID}"
+  else
+    echo "    backup(volume): skipped, appdata id unknown (appdata was already gone when resolved and"
+    echo "    no --volume-id was given); only the file-system-id backup filter is checked"
+  fi
   for i in $(seq 1 "$ABSENCE_TRIES"); do
     left="$(residuals)"
     if [ -z "$left" ]; then
@@ -507,6 +555,8 @@ confirm_no_access_point_resolved() {
   resolved="$(resolve_appdata_volume)"
   if [ -z "$resolved" ]; then
     echo "    $TARGET_VOLUME already gone; checking the file system only"
+  else
+    APPDATA_ID="$resolved"
   fi
   confirm_no_access_point "$resolved"
 }

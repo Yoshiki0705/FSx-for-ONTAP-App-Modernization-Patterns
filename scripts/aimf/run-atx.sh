@@ -13,7 +13,8 @@
 #   - sets AWS_REGION=ap-northeast-1 (and unsets ATX_CUSTOM_ENDPOINT, which would override it),
 #     records that value as aws_region_env, and records regionSource as atx itself logged it;
 #   - fails when atx fails (its exit status is read from PIPESTATUS, not from tee), and moves the
-#     estimate to estimates/used/ only after a successful run.
+#     estimate to estimates/used/ only after a successful run, before anything else that could
+#     fail afterwards (log write, regionSource capture, region check).
 #
 # The invocation is assembled from the public AWS Transform custom user guide: the non-interactive
 # form `atx custom def exec -n <name> -p <path> -x -t` (Getting Started; Command Reference) and the
@@ -127,7 +128,8 @@ capture_region_source() {
   if [ -d "$ATX_LOG_DIR" ]; then
     while IFS= read -r f; do logs+=("$f"); done < <(find "$ATX_LOG_DIR" -type f -newer "$marker")
   fi
-  python3 - "$out_file" "${logs[@]}" <<'PY'
+  # ${logs[@]+...}: an empty array under set -u is fatal on bash < 4.4 (macOS /bin/bash is 3.2).
+  python3 - "$out_file" ${logs[@]+"${logs[@]}"} <<'PY'
 import re
 import sys
 
@@ -171,23 +173,42 @@ set -e
 atx_rc="${statuses[0]}"
 tee_rc="${statuses[1]}"
 
-region_line="$(capture_region_source "$ATX_OUT" "$MARKER")"
-echo "$region_line" | tee -a "$RUN_LOG"
+# Never fatal: the region capture runs after atx, so a failure here must not skip consuming the
+# estimate of a run that already happened (and was billed).
+# The || sits on the assignment, outside the $(...) subshell, so even a shell error inside the
+# capture (which ends that subshell) falls back to the unverified line.
+region_of_run() {
+  local line
+  line="$(capture_region_source "$ATX_OUT" "$MARKER" 2>/dev/null)" \
+    || line="regionSource=unverified (capture failed)"
+  [ -n "$line" ] || line="regionSource=unverified (capture printed nothing)"
+  printf '%s\n' "$line"
+}
 
 if [ "$atx_rc" -ne 0 ]; then
-  echo "atx exit=$atx_rc at $(stamp); estimate NOT moved to used/" | tee -a "$RUN_LOG" >&2
+  region_line="$(region_of_run)"
+  echo "$region_line" >>"$RUN_LOG"
+  echo "$region_line"
+  echo "atx exit=$atx_rc at $(stamp); estimate NOT moved to used/" >>"$RUN_LOG"
+  echo "atx exit=$atx_rc; estimate NOT moved to used/" >&2
   exit 1
 fi
-if [ "$tee_rc" -ne 0 ]; then
-  echo "run-atx: writing the run log failed (tee exit $tee_rc); estimate NOT moved" >&2
-  exit 1
-fi
-echo "atx exit=0 at $(stamp)" >>"$RUN_LOG"
 
-# The run happened, so the estimate is consumed whether or not the region check below passes.
+# atx succeeded, so the run happened: consume the estimate FIRST, before anything else that could
+# fail (log write, region capture, region check), so the entry check cannot pass a second time.
 mkdir -p "$ESTIMATES_DIR/used"
 mv "$ESTIMATE" "$ESTIMATES_DIR/used/"
 echo "run-atx: estimate moved to used/"
+echo "atx exit=0 at $(stamp)" >>"$RUN_LOG"
+
+region_line="$(region_of_run)"
+echo "$region_line" >>"$RUN_LOG"
+echo "$region_line"
+
+if [ "$tee_rc" -ne 0 ]; then
+  echo "run-atx: writing the run log failed (tee exit $tee_rc); the run log is incomplete" >&2
+  exit 1
+fi
 
 case "$region_line" in
   *" region=$REGION "*) echo "run-atx: done" ;;

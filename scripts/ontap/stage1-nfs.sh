@@ -208,7 +208,12 @@ ensure_unix_user() {
     if [ "$existing" != "$uid" ]; then
       ontap_die 1 "UNIX user $name exists with uid $existing, not $uid; not rewriting it"
     fi
-    ontap_note "UNIX user $name uid=$uid already present; left unchanged"
+    local existing_gid
+    existing_gid="$(ontap_jq 'str(d.get("primary_gid", ""))')"
+    if [ "$existing_gid" != "$uid" ]; then
+      ontap_die 1 "UNIX user $name exists with primary_gid $existing_gid, not $uid; not rewriting it"
+    fi
+    ontap_note "UNIX user $name uid=$uid primary_gid=$uid already present; left unchanged"
     return 0
   fi
   if [ "$status" != "404" ]; then

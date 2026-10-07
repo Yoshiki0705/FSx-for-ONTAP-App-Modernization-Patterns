@@ -27,7 +27,8 @@
 #              UNCONFIRMED (U26)
 #           3. Snapshot it_<n>: DELETE /api/storage/volumes/{appdata-uuid}/snapshots/{snapshot-uuid}
 #         Before deleting, the clone must be a FlexClone whose parent is appdata, and must not be
-#         appdata's UUID; otherwise exit 2.
+#         appdata's UUID; otherwise exit 2. An absent clone (0 records) skips step 1 and still runs
+#         2 and 3, so a re-run after a partial delete, or a sweep over an orphan it_<n>, exits 0.
 #
 # Every path that is SVM- or volume-scoped is keyed by the UUID resolved at runtime. Credentials:
 # create/delete read only appmod/ontap-itclone (ONTAP user appmod-itclone) via the instance role.
@@ -215,12 +216,18 @@ clone_uuid_checked() {
     return 0
   fi
   ontap_ok GET "$path"
+  # Absent clone: print nothing. Checked on the record count, before any field is parsed.
+  if [ "$(ontap_jq 'len(d.get("records") or [])')" = "0" ]; then return 0; fi
   local facts uuid flex parent
-  facts="$(ontap_jq '"\t".join(str(x) for x in ((lambda r: (r.get("uuid", ""), (r.get("clone") or {}).get("is_flexclone", False), ((r.get("clone") or {}).get("parent_volume") or {}).get("name", "")))((d.get("records") or [{}])[0])))')"
-  IFS="$(printf '\t')" read -r uuid flex parent <<EOF
+  # Unit separator (0x1f), not tab: tab is IFS whitespace, so `read` would collapse an empty
+  # leading field and shift is_flexclone into uuid.
+  facts="$(ontap_jq '"\x1f".join(str(x) for x in ((lambda r: (r.get("uuid", ""), (r.get("clone") or {}).get("is_flexclone", False), ((r.get("clone") or {}).get("parent_volume") or {}).get("name", "")))((d.get("records") or [{}])[0])))')"
+  IFS=$'\x1f' read -r uuid flex parent <<EOF
 $facts
 EOF
-  if [ -z "$uuid" ]; then return 0; fi
+  if [ -z "$uuid" ]; then
+    ontap_die 1 "$clone record has no uuid; refusing to guess"
+  fi
   if [ "$uuid" = "$PARENT_UUID" ] || [ "$flex" != "True" ] || [ "$parent" != "$PARENT" ]; then
     ontap_die 2 "$clone is not a FlexClone of $PARENT (is_flexclone=$flex parent=$parent); refusing to delete"
   fi

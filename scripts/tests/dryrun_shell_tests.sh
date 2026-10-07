@@ -484,6 +484,128 @@ check_before "integration-clone delete order: recovery-queue purge before snapsh
   "recovery-queue/purge" "/snapshots/<it_3-uuid>" "$IC_DELETE"
 check_absent "integration-clone never prints a password" "appmod-itclone:\$" "$IC_DELETE"
 
+# --- ONTAP REST mock: the non-dry-run branches of integration-clone.sh and stage1-nfs.sh ----------
+# A PATH-mocked curl answers from a per-case route list (method + URL substring, first unused match
+# wins, "once" routes are consumed) and logs every request; a PATH-mocked aws answers only the
+# secret read. No AWS, ONTAP or network call is made. This proves shell control flow, not ONTAP.
+ONTAP_MOCK="$TMP/ontapmock"; mkdir -p "$ONTAP_MOCK"
+cat >"$ONTAP_MOCK/curl" <<'MOCK'
+#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+stdin = sys.stdin.read()
+method, out, url = "GET", None, args[-1]
+i = 0
+while i < len(args):
+    if args[i] == "-X": method = args[i + 1]; i += 2; continue
+    if args[i] == "-o": out = args[i + 1]; i += 2; continue
+    i += 1
+path = os.environ["MOCK_CURL_ROUTES"]
+routes = json.load(open(path))
+status, body, tag = 404, {"error": {"message": "no mock route"}}, "UNMATCHED"
+for r in routes:
+    if r.get("used") or r["method"] != method or r["path"] not in url:
+        continue
+    status, body, tag = r.get("status", 200), r.get("body", {}), "matched"
+    if r.get("once"):
+        r["used"] = True
+        json.dump(routes, open(path, "w"))
+    break
+cred = "stdin" if stdin.startswith("user = ") else "missing"
+leak = "yes" if "mock-pw" in " ".join(args) else "no"
+with open(os.environ["MOCK_CURL_LOG"], "a") as log:
+    log.write(f"{method} {url} {tag} credential={cred} pw-in-argv={leak}\n")
+if out:
+    json.dump(body, open(out, "w"))
+sys.stdout.write(str(status))
+MOCK
+cat >"$ONTAP_MOCK/aws" <<'MOCK'
+#!/bin/bash
+case "$*" in
+  *"secretsmanager get-secret-value"*) printf '%s\n' '{"username":"mock","password":"mock-pw"}' ;;
+  *) echo "ontap mock: unexpected aws call: $*" >&2; exit 1 ;;
+esac
+MOCK
+chmod +x "$ONTAP_MOCK/curl" "$ONTAP_MOCK/aws"
+ONTAP_ENV=(env -u APPMOD_DRY_RUN PATH="$ONTAP_MOCK:$PATH" APPMOD_POLL_SLEEP=0 APPMOD_POLL_TRIES=3)
+# Common routes: SVM and appdata UUID resolution.
+ROUTES_BASE='{"method":"GET","path":"/api/svm/svms?name=appmodsvm","body":{"records":[{"uuid":"svm-u"}],"num_records":1}},
+{"method":"GET","path":"/api/storage/volumes?name=appdata&svm.name=appmodsvm","body":{"records":[{"uuid":"appdata-u"}],"num_records":1}}'
+
+# (a) sweep meets an orphan it_3 snapshot with no appdata_it_3 clone: exit 0, the snapshot is
+# deleted, and no volume is unmounted or deleted. (An absent clone used to parse as uuid=False.)
+export MOCK_CURL_ROUTES="$TMP/routes-sweep.json" MOCK_CURL_LOG="$TMP/curl-sweep.log"
+cat >"$MOCK_CURL_ROUTES" <<EOF
+[$ROUTES_BASE,
+{"method":"GET","path":"/api/storage/volumes?svm.uuid=svm-u&name=appdata_it_*","body":{"records":[],"num_records":0}},
+{"method":"GET","path":"/api/storage/volumes/appdata-u/snapshots?name=it_*","body":{"records":[{"name":"it_3"}],"num_records":1}},
+{"method":"GET","path":"/api/storage/volumes?name=appdata_it_3&svm.uuid=svm-u","body":{"records":[],"num_records":0}},
+{"method":"GET","path":"/api/private/cli/volume/recovery-queue","body":{"records":[],"num_records":0}},
+{"method":"GET","path":"/api/storage/volumes/appdata-u/snapshots?name=it_3&fields=uuid","once":true,"body":{"records":[{"uuid":"snap-u"}],"num_records":1}},
+{"method":"DELETE","path":"/api/storage/volumes/appdata-u/snapshots/snap-u","status":202,"body":{}},
+{"method":"GET","path":"/api/storage/volumes/appdata-u/snapshots?name=it_3","body":{"records":[],"num_records":0}}]
+EOF
+: >"$MOCK_CURL_LOG"
+SW_OUT="$("${ONTAP_ENV[@]}" bash scripts/ontap/integration-clone.sh sweep --credential fsxadmin \
+  --mgmt-ip 203.0.113.5 2>&1)"; SW_RC=$?
+if [ "$SW_RC" -eq 0 ] \
+  && grep -q "^DELETE https://203.0.113.5/api/storage/volumes/appdata-u/snapshots/snap-u" "$MOCK_CURL_LOG" \
+  && ! grep -qE "^(PATCH|DELETE) https://203.0.113.5/api/storage/volumes/[^/?]+\?" "$MOCK_CURL_LOG" \
+  && ! grep -q "UNMATCHED" "$MOCK_CURL_LOG" && ! grep -q "pw-in-argv=yes" "$MOCK_CURL_LOG" \
+  && ! grep -q "credential=missing" "$MOCK_CURL_LOG"; then
+  echo "ok: integration-clone sweep deletes an orphan it_3 snapshot with no clone (exit 0, no volume delete)"
+else
+  echo "FAIL: integration-clone sweep on an orphan it_3 snapshot (rc=$SW_RC) should exit 0 and delete only the snapshot" >&2
+  echo "$SW_OUT" >&2; cat "$MOCK_CURL_LOG" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+# (b) stage1-nfs: existing UNIX users are accepted only when uid AND primary_gid match.
+S1_ROUTES_PRE="$ROUTES_BASE,
+{\"method\":\"GET\",\"path\":\"/api/storage/volumes/appdata-u?fields=nas.security_style\",\"body\":{\"nas\":{\"security_style\":\"ntfs\"}}},
+{\"method\":\"GET\",\"path\":\"/api/protocols/nfs/services/svm-u?fields=enabled\",\"body\":{\"enabled\":true,\"protocol\":{\"v41_enabled\":true}}},
+{\"method\":\"GET\",\"path\":\"/api/protocols/nfs/export-policies?svm.uuid=svm-u&name=appmod_nfs\",\"body\":{\"records\":[{\"id\":7}],\"num_records\":1}},
+{\"method\":\"GET\",\"path\":\"/api/protocols/nfs/export-policies/7/rules\",\"body\":{\"records\":[{\"clients\":[{\"match\":\"192.0.2.0/24\"}],\"protocols\":[\"nfs4\"],\"ro_rule\":[\"sys\"],\"rw_rule\":[\"sys\"],\"superuser\":[\"none\"]}]}},
+{\"method\":\"GET\",\"path\":\"/api/storage/volumes/appdata-u?fields=nas.export_policy.name\",\"body\":{\"nas\":{\"export_policy\":{\"name\":\"appmod_nfs\"}}}}"
+S1_ARGS=(--client-cidr 192.0.2.0/24 --mgmt-ip 203.0.113.5 --svm appmodsvm --volume appdata)
+export MOCK_CURL_ROUTES="$TMP/routes-s1-gid.json" MOCK_CURL_LOG="$TMP/curl-s1-gid.log"
+cat >"$MOCK_CURL_ROUTES" <<EOF
+[$S1_ROUTES_PRE,
+{"method":"GET","path":"/api/name-services/unix-users/svm-u/appsvc","body":{"name":"appsvc","id":10001,"primary_gid":20000}}]
+EOF
+: >"$MOCK_CURL_LOG"
+G_OUT="$("${ONTAP_ENV[@]}" bash scripts/ontap/stage1-nfs.sh "${S1_ARGS[@]}" 2>&1)"; G_RC=$?
+if [ "$G_RC" -eq 1 ] && grep -q "primary_gid 20000, not 10001" <<<"$G_OUT" \
+  && ! grep -qE "^(POST|PATCH)" "$MOCK_CURL_LOG"; then
+  echo "ok: stage1-nfs stops (exit 1) on an existing appsvc with the wrong primary_gid, writing nothing"
+else
+  echo "FAIL: stage1-nfs with appsvc primary_gid 20000 (rc=$G_RC) should exit 1 without a write" >&2
+  echo "$G_OUT" >&2; cat "$MOCK_CURL_LOG" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+export MOCK_CURL_ROUTES="$TMP/routes-s1-ok.json" MOCK_CURL_LOG="$TMP/curl-s1-ok.log"
+cat >"$MOCK_CURL_ROUTES" <<EOF
+[$S1_ROUTES_PRE,
+{"method":"GET","path":"/api/name-services/unix-users/svm-u/appsvc","body":{"name":"appsvc","id":10001,"primary_gid":10001}},
+{"method":"GET","path":"/api/name-services/unix-users/svm-u/appreader","body":{"name":"appreader","id":10002,"primary_gid":10002}},
+{"method":"GET","path":"/api/name-services/name-mappings?svm.uuid=svm-u","body":{"records":[],"num_records":0}},
+{"method":"POST","path":"/api/name-services/name-mappings","status":201,"body":{}},
+{"method":"GET","path":"/api/protocols/cifs/services/svm-u?fields=default_unix_user","body":{"default_unix_user":""}},
+{"method":"GET","path":"/api/protocols/nfs/services/svm-u?fields=windows","body":{"windows":{}}}]
+EOF
+: >"$MOCK_CURL_LOG"
+K_OUT="$("${ONTAP_ENV[@]}" bash scripts/ontap/stage1-nfs.sh "${S1_ARGS[@]}" 2>&1)"; K_RC=$?
+if [ "$K_RC" -eq 0 ] && grep -q "appsvc uid=10001 primary_gid=10001 already present" <<<"$K_OUT" \
+  && [ "$(grep -c "^POST https://203.0.113.5/api/name-services/name-mappings " "$MOCK_CURL_LOG")" = "4" ] \
+  && ! grep -q "UNMATCHED" "$MOCK_CURL_LOG" && ! grep -q "pw-in-argv=yes" "$MOCK_CURL_LOG"; then
+  echo "ok: stage1-nfs accepts matching existing UNIX users and creates the 4 name mappings"
+else
+  echo "FAIL: stage1-nfs with matching UNIX users (rc=$K_RC) should exit 0 and post 4 name mappings" >&2
+  echo "$K_OUT" >&2; cat "$MOCK_CURL_LOG" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+unset MOCK_CURL_ROUTES MOCK_CURL_LOG
+
 # --- teardown.sh: the dry-run --apply must BUILD the real calls in the design order ---------------
 # Short placeholder ids (not 17-char hex) so the pre-commit secret scan does not read them as real.
 TD_ARGS=(--file-system-id fs-test --linux-instance i-lnx --bucket appmod-artifacts-example
@@ -519,6 +641,16 @@ done
 check_contains "teardown enumerates secrets including planned deletion" \
   "list-secrets --include-planned-deletion" "$TD_OUT"
 check_absent "teardown never hardcodes a placeholder volume id" "vol-0123456789abcdef0" "$TD_OUT"
+check_contains "teardown step 10 checks backups by the given volume id" \
+  "fsx describe-backups --filters Name=volume-id,Values=fsvol-test" "$TD_OUT"
+check_contains "teardown stages tracked scripts/ontap files one by one" \
+  "s3 cp --quiet $REPO_ROOT/scripts/ontap/lib-ontap-rest.sh s3://appmod-artifacts-example/teardown/scripts/ontap/lib-ontap-rest.sh" "$TD_OUT"
+check_absent "teardown never stages scripts/ontap recursively" "s3 cp --recursive --quiet $REPO_ROOT/scripts/ontap/" "$TD_OUT"
+# Without --volume-id, step 10 still checks backups by the appdata id resolved by enumeration (H4).
+TD_NOVOL="$(APPMOD_DRY_RUN=1 bash scripts/teardown.sh --apply --file-system-id fs-test --linux-instance i-lnx \
+  --bucket appmod-artifacts-example --windows-role appmod-test-WindowsRole 2>&1)"
+check_contains "teardown step 10 checks backups by the enumerated appdata id without --volume-id" \
+  "fsx describe-backups --filters Name=volume-id,Values=<appdata-volume-id>" "$TD_NOVOL"
 TD_REPORT="$(env -u APPMOD_DRY_RUN bash scripts/teardown.sh 2>&1)"
 check_contains "teardown report names the EC2 start + SSM wait step" "- 0 start the Linux EC2" "$TD_REPORT"
 check_absent "teardown report-only makes no AWS call" "DRY-RUN:" "$TD_REPORT"
@@ -572,8 +704,10 @@ cat >"$MOCK_BIN/atx" <<'MOCK'
 #!/bin/bash
 printf '%s\n' "$*" >"$MOCK_ATX_ARGV"
 sleep 1
-printf '%s\n' '2026-01-01 00:00:00 [DEBUG]: Initializing FrontendServiceClient with config:' \
-  '{ "region": "ap-northeast-1", "regionSource": "mock-source-from-atx-log" }' >"$APPMOD_ATX_LOG_DIR/debug1.log"
+if [ -z "${MOCK_ATX_NO_LOG:-}" ]; then
+  printf '%s\n' '2026-01-01 00:00:00 [DEBUG]: Initializing FrontendServiceClient with config:' \
+    '{ "region": "ap-northeast-1", "regionSource": "mock-source-from-atx-log" }' >"$APPMOD_ATX_LOG_DIR/debug1.log"
+fi
 exit "${MOCK_ATX_RC:-0}"
 MOCK
 printf '#!/bin/bash\nexit 0\n' >"$MOCK_BIN/gitleaks"
@@ -628,6 +762,24 @@ if [ "$S_RC" -eq 0 ] && [ -f "$EST_DIR/used/atx-succeeds.json" ] \
 else
   echo "FAIL: run-atx success path (rc=$S_RC) should move the estimate and record regionSource from atx" >&2
   cat "$TMP/atx-run.log" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+# (4) atx succeeds but writes no debug log, and the log directory does not exist (empty array under
+# set -u; fatal on bash < 4.4): exit 0, estimate moved, regionSource recorded as unverified.
+EST_N="$(new_atx_estimate atx-no-debug-log)"
+: >"$TMP/atx-run-nolog.log"
+env -u APPMOD_DRY_RUN PATH="$MOCK_BIN:$PATH" APPMOD_SEND_DIR="$ATX_SEND" \
+  APPMOD_ATX_LOG_DIR="$TMP/atx-logs-absent" APPMOD_RUN_LOG="$TMP/atx-run-nolog.log" \
+  APPMOD_ATX_VERIFIED_RECORD="$VREC" MOCK_ATX_RC=0 MOCK_ATX_NO_LOG=1 \
+  bash scripts/aimf/run-atx.sh --estimate "$EST_N" --approved-at "$APPROVED" >/dev/null 2>&1
+N_RC=$?
+if [ "$N_RC" -eq 0 ] && [ -f "$EST_DIR/used/atx-no-debug-log.json" ] && [ ! -f "$EST_N" ] \
+  && grep -q "^regionSource=unverified" "$TMP/atx-run-nolog.log" \
+  && grep -q "^atx exit=0" "$TMP/atx-run-nolog.log"; then
+  echo "ok: run-atx with no atx debug log exits 0, consumes the estimate, records regionSource=unverified"
+else
+  echo "FAIL: run-atx success without a debug log (rc=$N_RC) should exit 0, move the estimate, record unverified" >&2
+  cat "$TMP/atx-run-nolog.log" >&2
   FAILURES=$((FAILURES + 1))
 fi
 
