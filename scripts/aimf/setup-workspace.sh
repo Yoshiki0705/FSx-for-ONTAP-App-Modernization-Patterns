@@ -88,11 +88,22 @@ step6_send_scan_selftest() {
   echo "6 send-scan self-test: a planted fake key must make gitleaks-send.toml exit 1"
   local tmp
   tmp="$(mktemp -d)"
-  # Build the fake key at run time so it is never a literal in this repository.
-  {
-    printf 'aws_access_key_id = AKIA'
-    printf '%s\n' 'IOSFODNN7EXAMPLE'   # gitleaks:allow (assembled at run time; AWS doc example)
-  } >"$tmp/planted.txt"
+  # Build the fake key at run time so it is never a literal in this repository: "AKIA" plus 16
+  # random characters from [A-Z2-7], the shape of an access key ID. The AWS documentation example
+  # key cannot be used, because the default gitleaks AWS rule allowlists values ending in EXAMPLE,
+  # so this self-test could never pass with it. A draw below Shannon entropy 3.5 is redrawn, so the
+  # rule's entropy floor (3) never drops a planted value.
+  local planted
+  planted="$(python3 -c 'import math, secrets
+alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+while True:
+    key = "AKIA" + "".join(secrets.choice(alphabet) for _ in range(16))  # gitleaks:allow
+    counts = [key.count(c) for c in set(key)]
+    if -sum(n / len(key) * math.log2(n / len(key)) for n in counts) >= 3.5:
+        break
+print(key)')" || { echo "setup-workspace: could not generate the planted key" >&2; rm -rf "$tmp"; exit 1; }
+  printf 'aws_access_key_id = %s\n' "$planted" >"$tmp/planted.txt"
+  unset planted
   # Any non-zero exit used to count as "flagged", so a missing gitleaks (127) or a config gitleaks
   # cannot load (also exit 1) read as a passing self-test. Pass only on exit 1 together with a JSON
   # report that lists at least one finding; the report is written outside the scanned directory.

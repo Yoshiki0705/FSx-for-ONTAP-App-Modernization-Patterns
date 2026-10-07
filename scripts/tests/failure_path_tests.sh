@@ -456,6 +456,121 @@ else
   fail "setup-workspace control (rc=$RC) should complete" "$OUT"
 fi
 
+# Step 6 with the real gitleaks and the real gitleaks-send.toml (git stays mocked): the planted key
+# must be flagged. The documentation example key is allowlisted by the default AWS rule, so a
+# self-test built on it can never pass. gitleaks is required here, as it is for `make audit`.
+SW_GITONLY="$TMP/sw-gitonly"; mkdir -p "$SW_GITONLY"; cp "$SW_MOCK/git" "$SW_GITONLY/git"
+if ! command -v gitleaks >/dev/null 2>&1; then
+  fail "setup-workspace step 6 with the real gitleaks: gitleaks is not installed"
+else
+  OUT="$(env -u APPMOD_DRY_RUN PATH="$SW_GITONLY:$PATH" MOCK_GIT_HEAD="$PIN" \
+    APPMOD_AIMF_WORKSPACE="$TMP/wsreal" bash scripts/aimf/setup-workspace.sh 2>&1)"; RC=$?
+  if [ "$RC" -eq 0 ] && has "send-scan flagged the planted key (exit 1" "$OUT" \
+    && has "setup-workspace: done" "$OUT"; then
+    pass "setup-workspace step 6: the real gitleaks-send.toml flags the run-time planted key"
+  else
+    fail "setup-workspace step 6 with the real gitleaks (rc=$RC) must flag the planted key" "$OUT"
+  fi
+fi
+
+# --------------------------------------------------------------------------- lock-fsxadmin (F1)
+# A mocked aws logs every call. A real `on` must never write a Deny for a principal that is not the
+# Linux instance role, so a missing or malformed APPMOD_LINUX_ROLE_ARN exits 2 before any call.
+LK_MOCK="$TMP/lk-mock"; mkdir -p "$LK_MOCK"
+cat >"$LK_MOCK/aws" <<'MOCK'
+#!/bin/bash
+echo "aws $*" >>"$MOCK_AWS_LOG"
+case "$*" in
+  *"ec2 describe-vpcs"*)
+    if [ -n "${MOCK_VPC_FAIL:-}" ]; then
+      echo "Error when retrieving token from sso: Token has expired and refresh failed" >&2; exit 255
+    fi
+    printf '%s\n' "${MOCK_VPC_CIDRS:-}" ;;
+  *) echo "{}" ;;
+esac
+MOCK
+chmod +x "$LK_MOCK/aws"
+LK_ENV=(env -u APPMOD_DRY_RUN -u APPMOD_LINUX_ROLE_ARN PATH="$LK_MOCK:$PATH")
+MOCK_AWS_LOG="$TMP/lk-unset.log"; : >"$MOCK_AWS_LOG"
+OUT="$("${LK_ENV[@]}" bash scripts/aimf/lock-fsxadmin.sh on 2>&1)"; RC=$?
+if [ "$RC" -eq 2 ] && has "APPMOD_LINUX_ROLE_ARN" "$OUT" && ! grep -q "put-resource-policy" "$MOCK_AWS_LOG"; then
+  pass "lock-fsxadmin on without APPMOD_LINUX_ROLE_ARN exits 2 with no put-resource-policy"
+else
+  fail "lock-fsxadmin on without APPMOD_LINUX_ROLE_ARN (rc=$RC) must exit 2 before any call" \
+    "$OUT" "$(cat "$MOCK_AWS_LOG")"
+fi
+MOCK_AWS_LOG="$TMP/lk-bad.log"; : >"$MOCK_AWS_LOG"
+OUT="$("${LK_ENV[@]}" APPMOD_LINUX_ROLE_ARN=appmod-linux-role bash scripts/aimf/lock-fsxadmin.sh on 2>&1)"; RC=$?
+if [ "$RC" -eq 2 ] && has "not an IAM role ARN" "$OUT" && [ ! -s "$MOCK_AWS_LOG" ]; then
+  pass "lock-fsxadmin on with a value that is not an IAM role ARN exits 2 with no call"
+else
+  fail "lock-fsxadmin on with APPMOD_LINUX_ROLE_ARN=appmod-linux-role (rc=$RC) must exit 2 before any call" \
+    "$OUT" "$(cat "$MOCK_AWS_LOG")"
+fi
+# Control: a role ARN is accepted and becomes the Deny's principal.
+MOCK_AWS_LOG="$TMP/lk-ok.log"; : >"$MOCK_AWS_LOG"
+OUT="$("${LK_ENV[@]}" APPMOD_LINUX_ROLE_ARN=arn:aws:iam::123456789012:role/appmod-test-LinuxRole \
+  bash scripts/aimf/lock-fsxadmin.sh on 2>&1)"; RC=$?
+if [ "$RC" -eq 0 ] && grep -q "put-resource-policy" "$MOCK_AWS_LOG" \
+  && grep -qF '"AWS":"arn:aws:iam::123456789012:role/appmod-test-LinuxRole"' "$MOCK_AWS_LOG"; then
+  pass "lock-fsxadmin on control: a role ARN is written as the Deny principal"
+else
+  fail "lock-fsxadmin on control with a role ARN (rc=$RC) should call put-resource-policy for it" \
+    "$OUT" "$(cat "$MOCK_AWS_LOG")"
+fi
+
+# --------------------------------------------------------------------------- preflight --cidr (F2)
+# The check the message announces must run: an overlapping existing VPC CIDR (any association, not
+# only the primary one) fails the phase, and so does a failed listing. Documentation ranges only.
+PF_ARGS=(bash scripts/preflight.sh --phase network --cidr 198.51.100.128/25)
+MOCK_AWS_LOG="$TMP/pf-overlap.log"; : >"$MOCK_AWS_LOG"
+OUT="$("${LK_ENV[@]}" MOCK_VPC_CIDRS="$(printf '192.0.2.0/24\t198.51.100.0/24')" "${PF_ARGS[@]}" 2>&1)"; RC=$?
+if [ "$RC" -eq 1 ] && has "overlaps existing VPC CIDR(s): 198.51.100.0/24" "$OUT" \
+  && ! has "Recommended EgressMode" "$OUT"; then
+  pass "preflight --cidr fails (exit 1) on an overlapping secondary VPC CIDR"
+else
+  fail "preflight --cidr with an overlapping existing VPC CIDR (rc=$RC) must exit 1" "$OUT" "$(cat "$MOCK_AWS_LOG")"
+fi
+MOCK_AWS_LOG="$TMP/pf-fail.log"; : >"$MOCK_AWS_LOG"
+OUT="$("${LK_ENV[@]}" MOCK_VPC_FAIL=1 "${PF_ARGS[@]}" 2>&1)"; RC=$?
+if [ "$RC" -eq 1 ] && ! has "Recommended EgressMode" "$OUT"; then
+  pass "preflight --cidr fails (exit 1) when describe-vpcs fails"
+else
+  fail "preflight --cidr with a failed describe-vpcs (rc=$RC) must exit 1" "$OUT"
+fi
+MOCK_AWS_LOG="$TMP/pf-ok.log"; : >"$MOCK_AWS_LOG"
+OUT="$("${LK_ENV[@]}" MOCK_VPC_CIDRS="$(printf '192.0.2.0/24\t203.0.113.0/24')" "${PF_ARGS[@]}" 2>&1)"; RC=$?
+if [ "$RC" -eq 0 ] && has "no existing VPC CIDR overlaps 198.51.100.128/25" "$OUT" \
+  && grep -q "CidrBlockAssociationSet" "$MOCK_AWS_LOG"; then
+  pass "preflight --cidr control: no overlap is reported as compared, and the phase passes"
+else
+  fail "preflight --cidr control without overlap (rc=$RC) should pass after comparing" "$OUT" "$(cat "$MOCK_AWS_LOG")"
+fi
+
+# --------------------------------------------------------------------------- stage0-smb DC (F3)
+# HTTP 401/403 on cifs/domains is a credential or role error: exit 1, not the exit-4 "tear down and
+# recreate" branch. Any other HTTP error answer keeps the designed exit 4.
+for S0_CODE in 401 403 404; do
+  MOCK_CURL_ROUTES="$TMP/s0dc-$S0_CODE.json"; MOCK_CURL_LOG="$TMP/s0dc-$S0_CODE.log"; : >"$MOCK_CURL_LOG"
+  cat >"$MOCK_CURL_ROUTES" <<EOF
+[{"method":"GET","path":"/api/svm/svms?name=appmodsvm","body":{"records":[{"uuid":"svm-u"}],"num_records":1}},
+{"method":"GET","path":"/api/protocols/cifs/domains/svm-u","status":$S0_CODE,"body":{"error":{"message":"mock HTTP $S0_CODE"}}}]
+EOF
+  OUT="$("${ONTAP_ENV[@]}" bash scripts/ontap/stage0-smb.sh --mgmt-ip 203.0.113.5 --svm appmodsvm --volume appdata 2>&1)"; RC=$?
+  if [ "$S0_CODE" = 404 ]; then
+    if [ "$RC" -eq 4 ] && has "tear down and recreate" "$OUT"; then
+      pass "stage0-smb keeps exit 4 for an HTTP 404 on cifs/domains (no DC discovered)"
+    else
+      fail "stage0-smb with an HTTP 404 on cifs/domains (rc=$RC) should keep exit 4" "$OUT" "$(cat "$MOCK_CURL_LOG")"
+    fi
+  elif [ "$RC" -eq 1 ] && has "credential or role error, not a missing DC" "$OUT" \
+    && ! has "tear down and recreate" "$OUT"; then
+    pass "stage0-smb exits 1 (not 4) on an HTTP $S0_CODE from cifs/domains"
+  else
+    fail "stage0-smb with an HTTP $S0_CODE on cifs/domains (rc=$RC) must exit 1, not 4" "$OUT" "$(cat "$MOCK_CURL_LOG")"
+  fi
+done
+
 echo "----"
 if [ "$FAILURES" -ne 0 ]; then
   echo "failure_path_tests: $FAILURES failure(s)" >&2

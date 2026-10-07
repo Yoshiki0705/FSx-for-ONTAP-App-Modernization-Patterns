@@ -209,7 +209,8 @@ vol_uuid() {
 
 # Assert a domain controller has been discovered for the SVM. Uses the cifs/domains
 # discovered_servers path (the active-directory collection alone is not sufficient; confirmed live
-# 2026-10-07). Requires at least one ms_dc server in state "ok". Exits 4 when none is found.
+# 2026-10-07). Requires at least one ms_dc server in state "ok". Exits 4 when none is found; exits 1
+# on a transport error or an HTTP 401/403 (a credential or role error, not a missing DC).
 assert_dc_discovered() {
   # An unresolved SVM UUID is a lookup failure, not "no DC discovered": it must not reach the
   # exit-4 branch, whose instruction is to tear the environment down.
@@ -224,20 +225,35 @@ assert_dc_discovered() {
     echo "DRY-RUN: curl -sS -k -u fsxadmin:<redacted> https://$MGMT_IP$path   # require an ms_dc in state ok"
     return 0
   fi
-  # An HTTP error answer here still reads as "no DC discovered" (exit 4, R8.3): what ONTAP answers
-  # for an SVM without a domain is not recorded, so that path is left as designed. A transport
-  # failure is checked explicitly and stops with exit 1.
-  local resp
-  resp="$(ontap GET "$path")" || { echo "stage0-smb: GET $path failed (curl transport error)" >&2; exit 1; }
-  if ! printf '%s' "$resp" | python3 -c 'import json,sys
+  # The status is read so that a credential or role error (HTTP 401/403) stops with exit 1 instead
+  # of the exit-4 "tear down and recreate" branch: those statuses are authentication and
+  # authorization answers whatever ONTAP returns for an SVM with no domain. Every other HTTP error
+  # answer still reads as "no DC discovered" (exit 4, R8.3), because what ONTAP answers for an SVM
+  # without a domain is not recorded. A transport failure stops with exit 1.
+  local resp status
+  resp="$(mktemp)"
+  if ! status="$(curl -sS -k -u "fsxadmin:$ONTAP_PW" -X GET -o "$resp" -w '%{http_code}' \
+      "https://$MGMT_IP$path")" || ! [[ "$status" =~ ^[1-5][0-9][0-9]$ ]]; then
+    rm -f "$resp"
+    echo "stage0-smb: GET $path failed before an HTTP status (curl transport error, status '${status:-}')" >&2
+    exit 1
+  fi
+  if [ "$status" = "401" ] || [ "$status" = "403" ]; then
+    rm -f "$resp"
+    echo "stage0-smb: GET $path returned HTTP $status: credential or role error, not a missing DC" >&2
+    exit 1
+  fi
+  if ! python3 -c 'import json,sys
 d=json.load(sys.stdin)
 servers=d.get("discovered_servers") or []
 ok=[s for s in servers if s.get("server_type")=="ms_dc" and s.get("state")=="ok"]
-sys.exit(0 if ok else 1)'; then
+sys.exit(0 if ok else 1)' <"$resp"; then
+    rm -f "$resp"
     echo "stage0-smb: no discovered domain controller (ms_dc, state ok) for SVM $SVM" >&2
     echo "stage0-smb: do not record b0; tear down and recreate (R8.3)" >&2
     exit 4
   fi
+  rm -f "$resp"
   note "domain controller discovered for $SVM (cifs/domains discovered_servers)"
 }
 
