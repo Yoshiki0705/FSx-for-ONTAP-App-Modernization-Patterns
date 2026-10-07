@@ -56,6 +56,11 @@ while [ $# -gt 0 ]; do
     *) echo "record-boundary: unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
+# --svm is the ONTAP SVM name, not the SVM ID from the FSx for ONTAP API (svm-...). Same check as teardown.sh.
+if [[ "$SVM" =~ ^svm-[0-9a-f]+$ ]]; then
+  echo "record-boundary: --svm takes the ONTAP SVM name (for example appmodsvm), not the SVM ID from the FSx for ONTAP API ($SVM)" >&2
+  exit 2
+fi
 
 case "$BOUNDARY" in b0|b1|b2|b3) ;; *) echo "record-boundary: --boundary must be b0..b3" >&2; usage; exit 2 ;; esac
 if [ -z "$RUN_ID" ]; then echo "record-boundary: --run-id is required" >&2; usage; exit 2; fi

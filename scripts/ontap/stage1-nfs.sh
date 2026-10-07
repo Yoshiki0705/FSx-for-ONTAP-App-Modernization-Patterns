@@ -67,6 +67,11 @@ while [ $# -gt 0 ]; do
     *) echo "stage1-nfs: unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
+# --svm is the ONTAP SVM name, not the SVM ID from the FSx for ONTAP API (svm-...). Same check as teardown.sh.
+if [[ "$SVM" =~ ^svm-[0-9a-f]+$ ]]; then
+  echo "stage1-nfs: --svm takes the ONTAP SVM name (for example appmodsvm), not the SVM ID from the FSx for ONTAP API ($SVM)" >&2
+  exit 2
+fi
 
 # The client CIDR is required and must be a strict IPv4 network (host bits zero). No default: a
 # placeholder would silently open the export to the wrong range.

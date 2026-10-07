@@ -101,6 +101,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# --svm is the ONTAP SVM name (appmodsvm), not the SVM ID from the FSx for ONTAP API (svm-...). The live teardown on
+# 2026-10-07 was given the SVM ID, and integration-clone.sh only failed later, at step 4, with
+# "could not resolve the SVM UUID". Reject the ID form here, before any call. The same check is
+# repeated in every script that takes --svm (scripts/ontap/*.sh), because those files are staged to
+# the Linux host one by one and cannot rely on a shared library being present.
+if [[ "$SVM" =~ ^svm-[0-9a-f]+$ ]]; then
+  echo "teardown: --svm takes the ONTAP SVM name (for example appmodsvm), not the SVM ID from the FSx for ONTAP API ($SVM)" >&2
+  exit 2
+fi
+
 # Required inputs are checked before any call, so a partial invocation cannot start deleting.
 if [ -n "$APPLY" ]; then
   missing=""

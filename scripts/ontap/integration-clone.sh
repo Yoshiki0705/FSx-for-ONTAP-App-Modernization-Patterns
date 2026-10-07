@@ -91,6 +91,12 @@ while [ $# -gt 0 ]; do
     *) echo "integration-clone: unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
+# --svm is the ONTAP SVM name, not the SVM ID from the FSx for ONTAP API (svm-...); the ID only fails later, as
+# "could not resolve the SVM UUID". Same check as teardown.sh, before any call.
+if [[ "$SVM" =~ ^svm-[0-9a-f]+$ ]]; then
+  echo "integration-clone: --svm takes the ONTAP SVM name (for example appmodsvm), not the SVM ID from the FSx for ONTAP API ($SVM)" >&2
+  exit 2
+fi
 
 # A name is acceptable only as appdata_it_<n>, n in 1..99, and never the parent volume.
 valid_clone_name() {

@@ -62,6 +62,11 @@ while [ $# -gt 0 ]; do
     *) echo "stage0-smb: unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
+# --svm is the ONTAP SVM name, not the SVM ID from the FSx for ONTAP API (svm-...). Same check as teardown.sh.
+if [[ "$SVM" =~ ^svm-[0-9a-f]+$ ]]; then
+  echo "stage0-smb: --svm takes the ONTAP SVM name (for example appmodsvm), not the SVM ID from the FSx for ONTAP API ($SVM)" >&2
+  exit 2
+fi
 
 note() { echo "stage0-smb: $*"; }
 

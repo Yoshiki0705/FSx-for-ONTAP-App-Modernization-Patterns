@@ -286,6 +286,44 @@ for bad in "create --name appdata" "create --name appdata_it_0" "delete --step 1
   fi
 done
 
+# --- --svm takes the ONTAP SVM name, never the SVM ID from the FSx for ONTAP API --------------------------------
+# The live teardown on 2026-10-07 was given the SVM ID and only failed at step 4. Every script that
+# takes --svm must reject the svm-<hex> form with exit 2 before building any call (no DRY-RUN line).
+# A short placeholder id, so the secret scan does not read it as a real one. record-boundary.sh
+# runs from $TMP because its dry-run writes a record under .private/runs/ in the working directory.
+SVM_ID_ARG="svm-0123abcd"
+svm_id_rejected() {  # svm_id_rejected <label> <command...>
+  local label="$1" out rc; shift
+  out="$("$@" 2>&1)"; rc=$?
+  if [ "$rc" -eq 2 ] && ! printf '%s' "$out" | grep -q "DRY-RUN" \
+    && printf '%s' "$out" | grep -qF "not the SVM ID from the FSx for ONTAP API"; then
+    echo "ok: $label rejects an SVM ID from the FSx for ONTAP API passed as --svm (exit 2, no call)"
+  else
+    echo "FAIL: $label with --svm $SVM_ID_ARG (rc=$rc) must exit 2 before any call" >&2
+    printf '%s\n' "$out" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+svm_id_rejected "teardown --apply" env APPMOD_DRY_RUN=1 bash scripts/teardown.sh --apply \
+  --file-system-id fs-test --linux-instance i-lnx --bucket appmod-artifacts-example \
+  --windows-role appmod-test-WindowsRole --svm "$SVM_ID_ARG"
+svm_id_rejected "teardown report-only via APPMOD_SVM" env APPMOD_SVM="$SVM_ID_ARG" bash scripts/teardown.sh
+svm_id_rejected "integration-clone sweep" env APPMOD_DRY_RUN=1 bash scripts/ontap/integration-clone.sh \
+  sweep --credential fsxadmin --mgmt-ip 203.0.113.5 --svm "$SVM_ID_ARG"
+svm_id_rejected "integration-clone create" env APPMOD_DRY_RUN=1 bash scripts/ontap/integration-clone.sh \
+  create --step 3 --mgmt-ip 203.0.113.5 --svm "$SVM_ID_ARG"
+svm_id_rejected "stage0-smb" env APPMOD_DRY_RUN=1 bash scripts/ontap/stage0-smb.sh \
+  --mgmt-ip 203.0.113.5 --svm "$SVM_ID_ARG"
+svm_id_rejected "stage1-nfs" env APPMOD_DRY_RUN=1 bash scripts/ontap/stage1-nfs.sh \
+  --client-cidr 10.0.0.0/24 --mgmt-ip 203.0.113.5 --svm "$SVM_ID_ARG"
+# shellcheck disable=SC2016  # $1 and $@ expand in the child bash, not here
+svm_id_rejected "record-boundary" bash -c 'cd "$1" && shift && exec "$@"' _ "$TMP" \
+  env APPMOD_DRY_RUN=1 bash "$REPO_ROOT/scripts/ontap/record-boundary.sh" --boundary b0 \
+  --run-id s0-20261007T000000Z --mgmt-ip 203.0.113.5 --svm "$SVM_ID_ARG"
+# Control: the SVM name itself is accepted (the dry-run reaches its first call).
+SVM_OK_OUT="$(APPMOD_DRY_RUN=1 bash scripts/ontap/integration-clone.sh sweep --credential fsxadmin \
+  --mgmt-ip 203.0.113.5 --svm appmodsvm 2>&1)"
+check_contains "integration-clone accepts the SVM name appmodsvm (control)" "DRY-RUN" "$SVM_OK_OUT"
 # --- preflight / create-secrets / lock-fsxadmin / teardown: flow runs under dry-run --------------
 expect_exit 0 "preflight network new-vpc dry-run" bash scripts/preflight.sh --phase network
 expect_exit 0 "preflight network new-vpc with cidr dry-run" \
