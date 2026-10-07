@@ -324,14 +324,14 @@ RP_OUT="$(APPMOD_DRY_RUN=1 bash scripts/run-probe.sh --stage 1 \
   --linux-instance "$RP_LNX" --bucket appmod-artifacts-example 2>&1)"
 check_contains "run-probe issues aws ssm send-command for the Windows probe" \
   "ssm send-command --instance-ids $RP_WIN" "$RP_OUT"
-check_contains "run-probe drives DocIntake.Probe on Windows" \
-  "DocIntake.Probe --store smb" "$RP_OUT"
+check_contains "run-probe drives the Windows probe launcher" \
+  "probe-launch.ps1 -Stage" "$RP_OUT"
 check_contains "run-probe issues aws ssm send-command for the Linux probe" \
   "ssm send-command --instance-ids $RP_LNX" "$RP_OUT"
-check_contains "run-probe drives probe_peer.py on Linux" \
-  "probe_peer.py --store smb" "$RP_OUT"
+check_contains "run-probe drives the Linux probe launcher over SMB" \
+  "probe-launch.sh --store smb" "$RP_OUT"
 check_contains "run-probe adds the NFS probe at stage 1" \
-  "probe_peer.py --store nfs" "$RP_OUT"
+  "probe-launch.sh --store nfs" "$RP_OUT"
 check_contains "run-probe uploads probe output to the artifacts bucket" \
   "--output-s3-bucket-name appmod-artifacts-example" "$RP_OUT"
 check_contains "run-probe copies results back with s3 cp" \

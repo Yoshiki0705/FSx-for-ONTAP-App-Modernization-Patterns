@@ -83,21 +83,24 @@ send_probe() {
     --output-s3-key-prefix "probe/$RUN_ID/$key_prefix"
 }
 
-# Windows DocIntake.Probe over SMB (writer / holder on the Windows side).
-WIN_ROOT="\\\\$SVM_NETBIOS\\appdata"
+# Windows DocIntake.Probe over SMB (writer / holder on the Windows side). The launcher establishes
+# the appsvc SMB session first (SSM runs as SYSTEM, which otherwise cannot reach the share) and
+# invokes the deployed Probe. probe-launch.ps1 must be staged at C:\appmod\probe-launch.ps1.
 send_probe "$WIN_INSTANCE" "AWS-RunPowerShellScript" \
-  "DocIntake.Probe --store smb --root $WIN_ROOT --stage $STAGE --role holder --run-id $RUN_ID" \
+  "powershell -ExecutionPolicy Bypass -File C:\\appmod\\probe-launch.ps1 -Stage $STAGE -RunId $RUN_ID -Role holder -SvmNetbios $SVM_NETBIOS -Region $REGION" \
   "windows"
 
-# Linux probe_peer.py over SMB (contender / reader on the Linux side).
+# Linux probe_peer.py over SMB (contender / reader on the Linux side). The launcher mounts the SMB
+# share as appsvc (sec=ntlmssp, falling back to krb5) and invokes probe_peer.py. probe-launch.sh
+# must be staged at /opt/appmod/probe-launch.sh.
 send_probe "$LNX_INSTANCE" "AWS-RunShellScript" \
-  "python3 /opt/appmod/probe_peer.py --store smb --root /mnt/appdata-smb --stage $STAGE --role contender --run-id $RUN_ID" \
+  "bash /opt/appmod/probe-launch.sh --store smb --stage $STAGE --role contender --run-id $RUN_ID --region $REGION --svm-netbios $SVM_NETBIOS" \
   "linux-smb"
 
 # Stage 1 and later add the NFS mount on the Linux side.
 if [ "$STAGE" -ge 1 ]; then
   send_probe "$LNX_INSTANCE" "AWS-RunShellScript" \
-    "python3 /opt/appmod/probe_peer.py --store nfs --root /mnt/appdata --stage $STAGE --role reader --run-id $RUN_ID" \
+    "bash /opt/appmod/probe-launch.sh --store nfs --stage $STAGE --role reader --run-id $RUN_ID --region $REGION --svm-netbios $SVM_NETBIOS" \
     "linux-nfs"
 fi
 
