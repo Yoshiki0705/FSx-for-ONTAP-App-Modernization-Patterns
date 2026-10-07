@@ -59,12 +59,18 @@ run_aws() {
   aws --region "$REGION" "$@"
 }
 
-# The approved estimate is the parameter source of truth: deploy.sh deploys exactly the
-# CloudFormation parameters recorded under "parameters" in the estimate, so what a human approved
-# and what create-stack receives cannot diverge. An estimate without a parameters object (an older
-# estimate written before deploy-time parameter passing) is refused rather than deployed with
-# template defaults, because the base.yaml CIDR defaults collide with existing VPCs in the shared
-# account. Prints one "ParameterKey=...,ParameterValue=..." token per recorded parameter.
+# The approved estimate is the parameter source of truth for the base stack: deploy.sh base deploys
+# exactly the CloudFormation parameters recorded under "parameters" in the estimate, so what a human
+# approved and what create-stack receives cannot diverge. A base estimate without a parameters
+# object (an older estimate written before deploy-time parameter passing) is refused rather than
+# deployed with template defaults, because the base.yaml CIDR defaults collide with existing VPCs in
+# the shared account. Prints one "ParameterKey=...,ParameterValue=..." token per recorded parameter.
+#
+# stage3 is a separate case: its required parameters (PrimarySubnetId, LambdaSecurityGroupId, VpcId)
+# are resource IDs that only exist once the base stack has been created, and the Lambda package key
+# and handler are decided in a later task (5.1 / 5.2). estimate.py does not record a stage3
+# parameters object, and deploy.sh does not resolve or require one for stage3 — stage3 deploy-time
+# parameter passing is deferred to that later task, not refused here.
 read_estimate_parameters() {
   local estimate_file="$1"
   APPMOD_DP_ESTIMATE="$estimate_file" python3 - <<'PY'
@@ -111,27 +117,40 @@ case "$TARGET" in
     ;;
 esac
 
-# Resolve the approved CloudFormation parameters from the estimate before the create call. A
-# missing parameters object exits 2 here (read_estimate_parameters), so an older estimate never
-# reaches create-stack. One array element per recorded parameter.
+# Resolve the approved CloudFormation parameters from the estimate before the create call. This is
+# base-only: for base, a missing parameters object exits 2 here (read_estimate_parameters), so an
+# older estimate never reaches create-stack with template defaults. For stage3 the parameters come
+# from the base stack's resource IDs and a later task, so none are resolved from the estimate (see
+# the comment on read_estimate_parameters); the array stays empty and no --parameters is passed.
 PARAMETERS=()
-while IFS= read -r token; do
-  [ -n "$token" ] && PARAMETERS+=("$token")
-done < <(read_estimate_parameters "$ESTIMATE")
-if [ "${#PARAMETERS[@]}" -eq 0 ]; then
-  echo "deploy: no deployable parameters resolved from estimate; not deploying" >&2
-  exit 2
+if [ "$TARGET" = "base" ]; then
+  while IFS= read -r token; do
+    [ -n "$token" ] && PARAMETERS+=("$token")
+  done < <(read_estimate_parameters "$ESTIMATE")
+  if [ "${#PARAMETERS[@]}" -eq 0 ]; then
+    echo "deploy: no deployable parameters resolved from estimate; not deploying" >&2
+    exit 2
+  fi
 fi
 
 echo "deploy: creating $STACK from $TEMPLATE in $REGION"
 # --on-failure DELETE so a failed base create does not leave half a stack billing; appdata is
 # DeletionPolicy Retain, so teardown.sh --after-failed-create handles a retained volume afterwards.
-run_aws cloudformation create-stack \
-  --stack-name "$STACK" \
-  --template-body "file://$TEMPLATE" \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --on-failure DELETE \
-  --parameters "${PARAMETERS[@]}"
+# base passes --parameters from the approved estimate; stage3 passes none (deferred).
+if [ "${#PARAMETERS[@]}" -gt 0 ]; then
+  run_aws cloudformation create-stack \
+    --stack-name "$STACK" \
+    --template-body "file://$TEMPLATE" \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --on-failure DELETE \
+    --parameters "${PARAMETERS[@]}"
+else
+  run_aws cloudformation create-stack \
+    --stack-name "$STACK" \
+    --template-body "file://$TEMPLATE" \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --on-failure DELETE
+fi
 
 # Move the estimate to used/ so it cannot be reused.
 mkdir -p "$ESTIMATES_DIR/used"

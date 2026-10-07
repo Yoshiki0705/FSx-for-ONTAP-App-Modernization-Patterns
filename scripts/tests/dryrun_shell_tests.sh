@@ -142,8 +142,9 @@ PY
 expect_exit 2 "deploy.sh base wrong region" \
   bash scripts/deploy.sh base --estimate "$WRONGREGION" --approved-at "$APPROVED"
 
-# 7. estimate WITHOUT a parameters object -> refused (exit 2). Fresh, unused, approved, in-region,
-# target-matched, so it passes the entry check and fails only on the missing parameters object.
+# 7. estimate WITHOUT a parameters object -> refused (exit 2) for base. Fresh, unused, approved,
+# in-region, target-matched, so it passes the entry check and fails only on the missing parameters
+# object. (stage3, below, is deliberately not subject to this gate.)
 NOPARAMS="$EST_DIR/noparams-base.json"
 cat >"$NOPARAMS" <<EOF
 {"target": "base", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 72}
@@ -157,6 +158,43 @@ json.dump(data,open(path,"w"))
 PY
 expect_exit 2 "deploy.sh base estimate without parameters object" \
   bash scripts/deploy.sh base --estimate "$NOPARAMS" --approved-at "$APPROVED"
+
+# 8. stage3: the parameters gate is base-only. A stage3 estimate carries no parameters object
+# (its required IDs come from the base stack and a later task, so parameter passing is deferred).
+# deploy.sh stage3 must NOT refuse it on the missing-parameters gate, and the dry-run create line
+# must NOT carry --parameters. Fresh, unused, approved, in-region, target-matched stage3 estimate.
+EST_STAGE3="$EST_DIR/case-stage3.json"
+cat >"$EST_STAGE3" <<EOF
+{"target": "stage3", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 24}
+EOF
+python3 - "$APPROVAL" "$EST_STAGE3" "$APPROVED" <<'PY'
+import json,sys
+path,est,approved=sys.argv[1:4]
+data=json.load(open(path))
+data.append({"target":"stage3","approved_at":approved,"hours":24,"estimate_file":est})
+json.dump(data,open(path,"w"))
+PY
+cp "$EST_STAGE3" "$EST_DIR/case-stage3-run.json"
+python3 - "$APPROVAL" "$EST_DIR/case-stage3-run.json" "$APPROVED" <<'PY'
+import json,sys
+path,est,approved=sys.argv[1:4]
+data=json.load(open(path))
+data.append({"target":"stage3","approved_at":approved,"hours":24,"estimate_file":est})
+json.dump(data,open(path,"w"))
+PY
+expect_exit 0 "deploy.sh stage3 estimate without parameters object (gate is base-only)" \
+  bash scripts/deploy.sh stage3 --estimate "$EST_DIR/case-stage3-run.json" --approved-at "$APPROVED"
+
+STAGE3_OUT="$(APPMOD_DRY_RUN=1 bash scripts/deploy.sh stage3 \
+  --estimate "$EST_STAGE3" --approved-at "$APPROVED" 2>/dev/null)"
+if echo "$STAGE3_OUT" | grep -q "create-stack" \
+  && ! echo "$STAGE3_OUT" | grep -q -- "--parameters"; then
+  echo "ok: deploy.sh stage3 dry-run creates the stack with no --parameters (deferred)"
+else
+  echo "FAIL: deploy.sh stage3 dry-run should create-stack without --parameters" >&2
+  echo "$STAGE3_OUT" >&2
+  FAILURES=$((FAILURES + 1))
+fi
 
 # --- run-atx.sh: same entry check with target=atx -------------------------------------------------
 EST_ATX="$EST_DIR/case-atx.json"
