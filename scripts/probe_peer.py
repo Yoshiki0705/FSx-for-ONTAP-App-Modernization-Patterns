@@ -91,7 +91,7 @@ def measure(behavior_id: str, body) -> dict:
 
 def case_sensitivity(root: Path) -> dict:
     # Create two files that differ only in case and report whether both exist as distinct files.
-    base = root / "probe"
+    base = root
     base.mkdir(parents=True, exist_ok=True)
     lower = base / "casecheck.txt"
     upper = base / "CaseCheck.txt"
@@ -108,7 +108,7 @@ def path_separator(root: Path) -> dict:
     # When the OS/protocol rejects the name, that rejection IS the observation: record it as a
     # measured result (rejected=true, the attempted name, the errno), not as outcome=error. error is
     # reserved for the probe failing to observe anything at all.
-    base = root / "probe"
+    base = root
     base.mkdir(parents=True, exist_ok=True)
     name = "sep\\check.txt"
     target = base / name
@@ -132,7 +132,7 @@ def path_separator(root: Path) -> dict:
 def file_locking(root: Path) -> dict:
     # Acquire an advisory exclusive lock with fcntl and report acquisition. The contender is a
     # separate process coordinated by run-probe.sh.
-    base = root / "probe"
+    base = root
     base.mkdir(parents=True, exist_ok=True)
     path = base / "lockcheck.txt"
     with path.open("w") as handle:
@@ -146,7 +146,7 @@ def acl_evaluation(root: Path) -> dict:
     # On Linux there is no GetAccessControl-style pre-check; record skipped-equivalent by reporting
     # the POSIX mode and that a pre-check is not available, so the pre-check vs I/O mismatch the
     # NTFS side records has no counterpart here.
-    base = root / "probe"
+    base = root
     base.mkdir(parents=True, exist_ok=True)
     path = base / "aclcheck.txt"
     path.write_text("a", encoding="utf-8")
@@ -155,15 +155,25 @@ def acl_evaluation(root: Path) -> dict:
 
 
 def write_visibility(root: Path) -> dict:
-    base = root / "probe"
+    base = root
     base.mkdir(parents=True, exist_ok=True)
     marker = base / f"vis-{uuid.uuid4().hex}.txt"
     marker.write_text("v", encoding="utf-8")
     return {"marker": marker.name}
 
 
+def work_dir(config: dict) -> Path:
+    """probe/<run_id>/<store>/ under the mount: the write area the design fixes for the Probe.
+
+    Per run, because a fixed probe/ directory carries the previous run's files into the next
+    (case-sensitivity creates a name the next run then finds). Per store, because from stage 1 the
+    SMB and NFS sides run concurrently on one host and would otherwise write the same names.
+    """
+    return Path(config["root"]) / "probe" / config["run_id"] / config["store"]
+
+
 def run(config: dict) -> dict:
-    root = Path(config["root"])
+    root = work_dir(config)
     behaviors = [
         measure("case-sensitivity", lambda: case_sensitivity(root)),
         measure("path-separator", lambda: path_separator(root)),
@@ -178,7 +188,11 @@ def run(config: dict) -> dict:
         "stage": config["stage"],
         "role": config["role"],
         "host": {"os": "linux", "runtime": "python3 (probe_peer.py)"},
-        "store": {"kind": config["store"], "root": config["root"]},
+        "store": {
+            "kind": config["store"],
+            "root": config["root"],
+            "work_dir": str(root),
+        },
         "behaviors": behaviors,
     }
 

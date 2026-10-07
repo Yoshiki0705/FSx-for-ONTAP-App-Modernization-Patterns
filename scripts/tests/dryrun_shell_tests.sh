@@ -396,7 +396,8 @@ expect_exit 2 "run-probe without --windows-instance" \
     --linux-instance i-0b --bucket b
 
 # --- record-boundary.sh: the dry-run must BUILD the REST GETs and write captured values -----------
-printf 'inv-content\n' >"$TMP/wininv.json"
+printf '{"top_level": ["out", "probe", "seed"], "files": [{"path": "seed/a.txt", "size": 1, "sha256": "aa"}]}\n' \
+  >"$TMP/wininv.json"
 RB_OUT="$(APPMOD_DRY_RUN=1 bash scripts/ontap/record-boundary.sh --boundary b0 \
   --run-id s0-rbtest --mgmt-ip 203.0.113.5 --svm appmodsvm --volume appdata \
   --windows-inventory "$TMP/wininv.json" 2>&1)"

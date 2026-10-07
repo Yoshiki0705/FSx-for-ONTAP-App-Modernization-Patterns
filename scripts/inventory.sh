@@ -6,12 +6,17 @@
 #
 #   inventory.sh --mount /mnt/appdata --out /tmp/linux-inventory.json
 #
+# Over NFS (sec=sys) the principal is the local uid. Run it as the UNIX user appsvc, e.g.
+# `setpriv --reuid=10001 --regid=10001 --clear-groups inventory.sh --mount /mnt/appdata`: root is
+# squashed to the anonymous user by the export (superuser none), which has no Windows mapping, so
+# the NTFS ACL denies it.
+#
 set -euo pipefail
 
 MOUNT=""
-OUT="/dev/stdout"
+OUT="-"
 
-usage() { echo "usage: inventory.sh --mount <dir> [--out <file>]" >&2; }
+usage() { echo "usage: inventory.sh --mount <dir> [--out <file>|-]" >&2; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -40,7 +45,7 @@ if ! FILES="$(find "$seed_root" -type f | LC_ALL=C sort)"; then
   echo "inventory: listing $seed_root failed; no inventory written" >&2
   exit 1
 fi
-{
+emit() {
   echo '{'
   echo '  "store": {"kind": "nfs", "root": "'"$MOUNT"'"},'
   echo '  "files": ['
@@ -57,5 +62,13 @@ $FILES
 EOF
   echo '  ]'
   echo '}'
-} >"$OUT"
+}
+# Writing to stdout without reopening /dev/stdout: reopening it fails with EACCES when this runs as
+# an unprivileged NFS principal (setpriv --reuid=10001) and stdout is a file root opened (live
+# 2026-10-07).
+if [ "$OUT" = "-" ]; then
+  emit
+else
+  emit >"$OUT"
+fi
 echo "inventory: wrote seed inventory to $OUT" >&2

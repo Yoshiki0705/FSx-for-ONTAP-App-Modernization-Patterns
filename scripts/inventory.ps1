@@ -33,8 +33,15 @@ $records = foreach ($file in $files) {
     [ordered]@{ path = $relative; size = $file.Length; sha256 = $hash }
 }
 
+# Top-level entries of the share, for the invariant's "only seed/, probe/, out/" check. -Force
+# includes hidden entries; the ONTAP snapshot directories are excluded here, by name.
+$topLevel = @(Get-ChildItem -LiteralPath $SharePath -Force |
+    Where-Object { $_.Name -notin @("~snapshot", ".snapshot") } |
+    Sort-Object Name | ForEach-Object { $_.Name })
+
 $payload = [ordered]@{
     store = [ordered]@{ kind = "smb"; root = $SharePath }
+    top_level = $topLevel
     files = @($records)
 }
 

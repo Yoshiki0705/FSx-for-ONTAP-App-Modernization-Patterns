@@ -14,6 +14,7 @@ STORE="" ; STAGE="" ; ROLE="" ; RUN_ID=""
 REGION="${APPMOD_REGION:-ap-northeast-1}"
 SVM_NETBIOS="${APPMOD_SVM_NETBIOS:-APPMODSVM01}"
 PROBE="/opt/appmod/probe_peer.py"
+NFS_UID="${APPMOD_NFS_UID:-10001}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -57,4 +58,13 @@ else
   echo "probe-launch: --store must be smb or nfs" >&2; exit 2
 fi
 
+if [ "$STORE" = "nfs" ]; then
+  # Over SMB the principal is the mount credential (APPMOD\appsvc) whatever the local uid. Over
+  # NFS with sec=sys it is the local uid, and Run Command runs as root, which the export squashes
+  # (superuser none) to the anonymous user and which has no Windows mapping, so every NTFS check
+  # denies it (live 2026-10-07). Run as the UNIX user appsvc (uid 10001) that stage1-nfs.sh maps to
+  # APPMOD\appsvc, so both protocols measure the same principal.
+  exec setpriv --reuid="$NFS_UID" --regid="$NFS_UID" --clear-groups \
+    python3 "$PROBE" --store "$STORE" --root "$ROOT" --stage "$STAGE" --role "$ROLE" --run-id "$RUN_ID"
+fi
 exec python3 "$PROBE" --store "$STORE" --root "$ROOT" --stage "$STAGE" --role "$ROLE" --run-id "$RUN_ID"

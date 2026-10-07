@@ -170,7 +170,6 @@ EOF
   APPMOD_RUN_ID="$RUN_ID" APPMOD_STAGE="$STAGE" APPMOD_OUT_DIR="$OUT_DIR" \
   APPMOD_EXPECTED_SIDES="$COLLECTED_SIDES" \
   APPMOD_TWO_CLIENT="$TWO_CLIENT_BEHAVIORS" python3 - <<'PY'
-import glob
 import json
 import os
 
@@ -179,19 +178,22 @@ run_id = os.environ["APPMOD_RUN_ID"]
 stage = int(os.environ["APPMOD_STAGE"])
 two_client = set(os.environ["APPMOD_TWO_CLIENT"].split())
 
+# Only the sides this run collected are merged. Globbing *.json picked up every other record in the
+# run directory (the b1 boundary record and both inventories share it), which listed them in
+# merged_from and would have merged any of them that carried a behaviors key (live 2026-10-07).
+expected = os.environ.get("APPMOD_EXPECTED_SIDES", "").split()
 sides = {}
-for path in sorted(glob.glob(os.path.join(out_dir, "*.json"))):
-    name = os.path.basename(path)
-    if name == "merged.json":
-        continue
+for side_name in expected:
+    path = os.path.join(out_dir, f"{side_name}.json")
     try:
-        sides[name] = json.load(open(path, encoding="utf-8"))
+        record = json.load(open(path, encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         continue
+    if record.get("schema") == "appmod-probe/1":
+        sides[os.path.basename(path)] = record
 
 # Every side collected in this run must have produced a readable record. A side silently skipped
 # here would leave a one-sided merge that is still labeled cross-host.
-expected = os.environ.get("APPMOD_EXPECTED_SIDES", "").split()
 unreadable = [s for s in expected if f"{s}.json" not in sides]
 if unreadable:
     raise SystemExit(

@@ -115,11 +115,18 @@ ontap() {
     return 0
   fi
   if [ -n "$body" ]; then
-    curl -sS -k -u "fsxadmin:$ONTAP_PW" -X "$method" "$url" \
-      -H 'Content-Type: application/json' -d "$body"
+    curl_auth -sS -k -X "$method" "$url" -H 'Content-Type: application/json' -d "$body"
   else
-    curl -sS -k -u "fsxadmin:$ONTAP_PW" -X "$method" "$url"
+    curl_auth -sS -k -X "$method" "$url"
   fi
+}
+
+# curl with the fsxadmin credential on stdin as a config line (-K -). Passing it with -u put the
+# password in curl's argv, where any local process can read it from /proc.
+curl_auth() {
+  local esc="${ONTAP_PW//\\/\\\\}"
+  esc="${esc//\"/\\\"}"
+  printf 'user = "fsxadmin:%s"\n' "$esc" | curl -K - "$@"
 }
 
 # Every write (POST/PATCH), and every GET whose answer is used as a fact (SVM and volume UUIDs, DC
@@ -137,9 +144,9 @@ ontap_checked() {
   fi
   local out status
   out="$(mktemp)"
-  local args=(-sS -k -u "fsxadmin:$ONTAP_PW" -X "$method" -o "$out" -w '%{http_code}')
+  local args=(-sS -k -X "$method" -o "$out" -w '%{http_code}')
   if [ -n "$body" ]; then args+=(-H 'Content-Type: application/json' -d "$body"); fi
-  if ! status="$(curl "${args[@]}" "https://$MGMT_IP$path")" \
+  if ! status="$(curl_auth "${args[@]}" "https://$MGMT_IP$path")" \
     || ! [[ "$status" =~ ^[1-5][0-9][0-9]$ ]]; then
     rm -f "$out"
     echo "stage0-smb: $method $path failed before an HTTP status (curl transport error, status '${status:-}')" >&2
@@ -232,7 +239,7 @@ assert_dc_discovered() {
   # without a domain is not recorded. A transport failure stops with exit 1.
   local resp status
   resp="$(mktemp)"
-  if ! status="$(curl -sS -k -u "fsxadmin:$ONTAP_PW" -X GET -o "$resp" -w '%{http_code}' \
+  if ! status="$(curl_auth -sS -k -X GET -o "$resp" -w '%{http_code}' \
       "https://$MGMT_IP$path")" || ! [[ "$status" =~ ^[1-5][0-9][0-9]$ ]]; then
     rm -f "$resp"
     echo "stage0-smb: GET $path failed before an HTTP status (curl transport error, status '${status:-}')" >&2

@@ -111,9 +111,14 @@ ontap_get() {
     printf '{}'
     return 0
   fi
-  local body status
+  local body status esc
   body="$(mktemp)"
-  if ! status="$(curl -sS -k -u "fsxadmin:$ONTAP_PW" -o "$body" -w '%{http_code}' "https://$MGMT_IP$path")" \
+  # The credential goes to curl on stdin as a config line (-K -), never in argv, where any local
+  # process could read it from /proc.
+  esc="${ONTAP_PW//\\/\\\\}"
+  esc="${esc//\"/\\\"}"
+  if ! status="$(printf 'user = "fsxadmin:%s"\n' "$esc" \
+      | curl -sS -k -K - -o "$body" -w '%{http_code}' "https://$MGMT_IP$path")" \
     || ! [[ "$status" =~ ^[1-5][0-9][0-9]$ ]]; then
     rm -f "$body"
     echo "record-boundary: GET $path failed before an HTTP status (curl transport error, status '${status:-}')" >&2
@@ -144,7 +149,9 @@ CLUSTER_JSON="$(ontap_get "/api/cluster?fields=version")" || exit 1
 VOLUMES_JSON="$(ontap_get "/api/storage/volumes?fields=name,uuid,nas.security_style,nas.export_policy.name,snapshot_locking_enabled,snaplock.type")" || exit 1
 VOL_UUID_JSON="$(ontap_get "/api/storage/volumes?name=$VOLUME&fields=uuid")" || exit 1
 EXPORT_JSON="$(ontap_get "/api/protocols/nfs/export-policies?svm.name=$SVM&fields=name,rules")" || exit 1
-NAMEMAP_JSON="$(ontap_get "/api/name-services/name-mappings?svm.name=$SVM")" || exit 1
+# Without fields= the collection returns only direction and index, which recorded every mapping
+# with a null pattern (live 2026-10-07).
+NAMEMAP_JSON="$(ontap_get "/api/name-services/name-mappings?svm.name=$SVM&fields=direction,index,pattern,replacement")" || exit 1
 
 # Resolve the target volume UUID so the snapshot list can be fetched for it. Under dry-run this
 # yields an empty id and the snapshot GET is still printed with the placeholder.
@@ -221,13 +228,39 @@ export_policies = [
     {"name": e.get("name"), "rule_count": len(e.get("rules", []))} for e in export
 ]
 name_mappings = [
-    {"direction": m.get("direction"), "pattern": m.get("pattern")} for m in namemap
+    {
+        "direction": m.get("direction"),
+        "index": m.get("index"),
+        "pattern": m.get("pattern"),
+        "replacement": m.get("replacement"),
+    }
+    for m in namemap
 ]
 snapshot_names = [s.get("name") for s in snaps]
+
+# The top-level listing comes from the Windows inventory (inventory.ps1, Get-ChildItem -Force over
+# SMB), the one source the design fixes for it. It used to be written here as a constant, which made
+# the invariant's top-level check compare a constant with itself.
+top_level = None
+win_inv_path = os.environ.get("APPMOD_WIN_INV", "")
+if win_inv_path:
+    try:
+        with open(win_inv_path, encoding="utf-8-sig") as handle:
+            listing = json.load(handle).get("top_level")
+        if isinstance(listing, list):
+            top_level = [str(x) for x in listing]
+    except (OSError, json.JSONDecodeError, AttributeError):
+        top_level = None
+if top_level is None and not dry:
+    raise SystemExit(
+        "record-boundary: the Windows inventory has no top_level listing; "
+        "re-run inventory.ps1 (it emits top_level) before recording the boundary"
+    )
 volume_list = [
     {
         "name": v.get("name"),
         "uuid": v.get("uuid"),
+        "export_policy": ((v.get("nas") or {}).get("export_policy") or {}).get("name", ""),
         "snapshot_locking_enabled": bool(v.get("snapshot_locking_enabled")),
         "snaplock_type": (v.get("snaplock") or {}).get("type", ""),
     }
@@ -251,7 +284,7 @@ record = {
             "sha256": os.environ.get("APPMOD_LNX_SHA", ""),
         },
     },
-    "top_level_paths": ["seed", "probe", "out"],
+    "top_level_paths": top_level,
     "snapshots": snapshot_names,
     "volumes": volume_list,
     "snapshot_locking_enabled": locking,
