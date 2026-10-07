@@ -6,13 +6,14 @@
 #
 #   GET /api/storage/volumes?fields=name,uuid,snapshot_locking_enabled,snaplock.type
 #
-# Fails (exit 3) when any volume has snapshot_locking_enabled true, or a snaplock.type other than
-# the non-SnapLock value, OR when the scanned list does not contain the target volume `appdata`
+# Fails (exit 3) when any volume has snapshot_locking_enabled other than false (absent included),
+# or a snaplock.type other than "non_snaplock" (absent included), OR when the scanned list does not contain the target volume `appdata`
 # (an empty or wrong scan must not read as "clean"). Prints the scanned volume names either way.
 #
 # U25 (resolved live 2026-10-07, ONTAP 9.19.1P2): `snaplock.type` is a valid field and a
-# non-SnapLock volume reports "non_snaplock". This script treats the set
-# {"", "non_snaplock", "none"} as not-locked and anything else as locked.
+# non-SnapLock volume reports "non_snaplock". That is the ONLY value accepted as not-locked; an
+# absent snaplock object, an empty type, or any other value is a violation. A missing field stops
+# teardown for a human rather than reading as clean.
 #
 # Runs on the Linux EC2 host via SSM Run Command; fsxadmin (or the read-only role) is read from
 # Secrets Manager by the instance role, never passed in argv. When APPMOD_ONTAP_FIXTURE points at a
@@ -26,7 +27,7 @@
 #
 set -euo pipefail
 
-NON_SNAPLOCK_VALUES='"" "non_snaplock" "none"'
+NON_SNAPLOCK_VALUES='"non_snaplock"'
 FIXTURE="${APPMOD_ONTAP_FIXTURE:-}"
 MGMT_IP="${APPMOD_ONTAP_MGMT_IP:-}"
 FS_ID="${APPMOD_FS_ID:-}"
@@ -99,9 +100,11 @@ print("scanned volumes: " + (", ".join(names) if names else "(none)"))
 violations = []
 for record in records:
     name = record.get("name", "<unnamed>")
-    if record.get("snapshot_locking_enabled") is True:
-        violations.append(f"{name}: snapshot_locking_enabled is true")
-    snaplock_type = (record.get("snaplock") or {}).get("type", "")
+    if record.get("snapshot_locking_enabled") is not False:
+        violations.append(
+            f"{name}: snapshot_locking_enabled is {record.get('snapshot_locking_enabled')!r}"
+        )
+    snaplock_type = (record.get("snaplock") or {}).get("type")
     if snaplock_type not in non_snaplock:
         violations.append(f"{name}: snaplock.type is {snaplock_type!r}")
 

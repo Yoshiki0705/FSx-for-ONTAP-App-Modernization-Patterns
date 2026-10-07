@@ -1,0 +1,6 @@
+{
+  "records": [
+    {"name": "appmodsvm_root", "uuid": "u-root", "snapshot_locking_enabled": false},
+    {"name": "appdata", "uuid": "u-appdata", "snapshot_locking_enabled": false, "snaplock": {"type": "non_snaplock"}}
+  ]
+}

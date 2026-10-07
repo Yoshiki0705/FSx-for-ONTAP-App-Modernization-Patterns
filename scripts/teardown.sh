@@ -206,7 +206,6 @@ start_linux_and_wait_ssm() {
   fi
   # Stage the tracked files of scripts/ontap/ for the host, one by one, so an untracked or scratch
   # file in that directory is never uploaded. Read back from the bucket by the instance role.
-  local tracked f
   local root tracked f
   root="$(cd "$HERE/.." && pwd)"
   tracked="$(git -C "$root" ls-files -- scripts/ontap)"

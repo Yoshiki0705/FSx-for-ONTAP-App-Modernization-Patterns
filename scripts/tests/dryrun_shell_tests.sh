@@ -3,7 +3,7 @@
 # Dry-run tests for the AWS- and ONTAP-calling shell scripts. Every case runs with APPMOD_DRY_RUN=1
 # (and fixtures for ONTAP), so NO AWS, ONTAP or network call is made. Covers the design test plan:
 # deploy.sh's six entry-check cases, run-atx.sh's same entry check, block_direct_atx.py's two cases,
-# check-no-locking.sh's locked / missing-appdata cases, integration-clone.sh's rejections, and that
+# check-no-locking.sh's locked / missing-appdata / absent-field cases, integration-clone.sh's rejections, and that
 # the happy paths reach their dry-run action.
 #
 # Exits 0 only when every expectation holds. Called from `make test`.
@@ -261,6 +261,11 @@ expect_exit 3 "check-no-locking locked volume" \
   env APPMOD_ONTAP_FIXTURE="$FIXTURES/ontap_locked.json" bash scripts/ontap/check-no-locking.sh
 expect_exit 3 "check-no-locking appdata absent" \
   env APPMOD_ONTAP_FIXTURE="$FIXTURES/ontap_no_appdata.json" bash scripts/ontap/check-no-locking.sh
+# An absent field must fail closed: only "non_snaplock" and an explicit false read as clean.
+expect_exit 3 "check-no-locking snaplock object absent" \
+  env APPMOD_ONTAP_FIXTURE="$FIXTURES/ontap_snaplock_absent.json" bash scripts/ontap/check-no-locking.sh
+expect_exit 3 "check-no-locking locking field absent" \
+  env APPMOD_ONTAP_FIXTURE="$FIXTURES/ontap_locking_field_absent.json" bash scripts/ontap/check-no-locking.sh
 
 # --- integration-clone.sh: name/range validation -------------------------------------------------
 # A management IP is passed so an exit 2 can only come from the name check, and each rejection must
