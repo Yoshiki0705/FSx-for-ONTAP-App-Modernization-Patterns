@@ -251,6 +251,156 @@ expect_exit 0 "lock-fsxadmin off dry-run" bash scripts/aimf/lock-fsxadmin.sh off
 expect_exit 2 "lock-fsxadmin bad action" bash scripts/aimf/lock-fsxadmin.sh sideways
 expect_exit 0 "teardown report-only" bash scripts/teardown.sh
 
+# --- stage0-smb.sh: the dry-run must BUILD the real ONTAP REST calls, not just run ----------------
+# Asserting the resolved commands appear is what stops a stub (echo-only) from passing review again.
+S0_OUT="$(APPMOD_DRY_RUN=1 bash scripts/ontap/stage0-smb.sh \
+  --mgmt-ip 203.0.113.5 --svm appmodsvm --volume appdata 2>&1)"
+check_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if printf '%s' "$haystack" | grep -qF -- "$needle"; then
+    echo "ok: $label"
+  else
+    echo "FAIL: $label (missing: $needle)" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+check_absent() {
+  local label="$1" needle="$2" haystack="$3"
+  if printf '%s' "$haystack" | grep -qF -- "$needle"; then
+    echo "FAIL: $label (should not contain: $needle)" >&2
+    FAILURES=$((FAILURES + 1))
+  else
+    echo "ok: $label"
+  fi
+}
+# DC discovery via the cifs/domains discovered_servers path (not active-directory alone).
+check_contains "stage0-smb asserts DC discovery via cifs/domains" \
+  "/api/protocols/cifs/domains/" "$S0_OUT"
+check_contains "stage0-smb cifs/domains requests discovered_servers" \
+  "discovered_servers" "$S0_OUT"
+# The real create calls are built.
+check_contains "stage0-smb creates the SMB share appdata (POST)" \
+  "POST https://203.0.113.5/api/protocols/cifs/shares" "$S0_OUT"
+check_contains "stage0-smb sets NTFS ACLs via file-security permissions" \
+  "/api/protocols/file-security/permissions/appmodsvm/%2Fappdata" "$S0_OUT"
+check_contains "stage0-smb includes an explicit deny-write ACE for appreader" \
+  '"access":"access_deny","user":"APPMOD\\appreader"' "$S0_OUT"
+check_contains "stage0-smb creates the seed/ directory" \
+  "/api/storage/volumes/appdata/files/seed" "$S0_OUT"
+check_contains "stage0-smb creates the probe/ directory" \
+  "/api/storage/volumes/appdata/files/probe" "$S0_OUT"
+check_contains "stage0-smb creates the out/ directory" \
+  "/api/storage/volumes/appdata/files/out" "$S0_OUT"
+check_contains "stage0-smb creates the appmod_itclone REST role" \
+  "appmod_itclone" "$S0_OUT"
+check_contains "stage0-smb creates the appmod_readonly REST role" \
+  "appmod_readonly" "$S0_OUT"
+# The credential is never shown; no lock is ever enabled.
+check_absent "stage0-smb never prints the fsxadmin password" \
+  "fsxadmin:\$ONTAP_PW" "$S0_OUT"
+check_contains "stage0-smb redacts the credential under dry-run" \
+  "fsxadmin:<redacted>" "$S0_OUT"
+check_absent "stage0-smb never enables snapshot locking" \
+  'snapshot_locking_enabled":true' "$S0_OUT"
+check_absent "stage0-smb never touches a snaplock endpoint" \
+  "/api/storage/snaplock" "$S0_OUT"
+# Argument validation: needs an IP or a file-system id to resolve one.
+expect_exit 2 "stage0-smb without mgmt-ip or fs-id" \
+  env -u APPMOD_FS_ID APPMOD_DRY_RUN=1 bash scripts/ontap/stage0-smb.sh --svm appmodsvm
+# DC-discovery exit 4 path: a response with no ms_dc in state ok makes it stop with exit 4. Feed a
+# fixture via a stubbed curl is not available here, so this is covered by the real-run contract in
+# design.md; the dry-run asserts the assertion is wired (the GET above). Exit 4 is proven by the
+# assert_dc_discovered body reading discovered_servers, exercised live.
+
+# --- run-probe.sh: the dry-run must BUILD send-command and s3 cp ----------------------------------
+# Short placeholder instance ids (not 17-char hex) so the pre-commit secret scan does not read them
+# as real EC2 instance ids. The merge logic does not depend on the id format.
+RP_WIN="i-win"
+RP_LNX="i-lnx"
+RP_OUT="$(APPMOD_DRY_RUN=1 bash scripts/run-probe.sh --stage 1 \
+  --run-id s1-testUTC --windows-instance "$RP_WIN" \
+  --linux-instance "$RP_LNX" --bucket appmod-artifacts-example 2>&1)"
+check_contains "run-probe issues aws ssm send-command for the Windows probe" \
+  "ssm send-command --instance-ids $RP_WIN" "$RP_OUT"
+check_contains "run-probe drives DocIntake.Probe on Windows" \
+  "DocIntake.Probe --store smb" "$RP_OUT"
+check_contains "run-probe issues aws ssm send-command for the Linux probe" \
+  "ssm send-command --instance-ids $RP_LNX" "$RP_OUT"
+check_contains "run-probe drives probe_peer.py on Linux" \
+  "probe_peer.py --store smb" "$RP_OUT"
+check_contains "run-probe adds the NFS probe at stage 1" \
+  "probe_peer.py --store nfs" "$RP_OUT"
+check_contains "run-probe uploads probe output to the artifacts bucket" \
+  "--output-s3-bucket-name appmod-artifacts-example" "$RP_OUT"
+check_contains "run-probe copies results back with s3 cp" \
+  "s3 cp s3://appmod-artifacts-example/probe/s1-testUTC" "$RP_OUT"
+check_contains "run-probe merges the two sides" \
+  "merged 2 behavior(s)" "$RP_OUT"
+# The merged record forces topology=cross-host on the two-client behaviors.
+if python3 - <<'PY'
+import json, sys
+d = json.load(open(".private/runs/s1-testUTC/merged.json", encoding="utf-8"))
+by = {b["id"]: b for b in d["behaviors"]}
+ok = all(
+    by[k]["observed"]["topology"] == "cross-host" for k in ("file-locking", "write-visibility")
+) and all(b["outcome"] in {"measured", "error", "skipped"} for b in d["behaviors"]) \
+  and d["schema"] == "appmod-probe/1"
+sys.exit(0 if ok else 1)
+PY
+then
+  echo "ok: run-probe merged record is cross-host, three-valued, schema appmod-probe/1"
+else
+  echo "FAIL: run-probe merged record missing cross-host/outcome/schema" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+rm -rf .private/runs/s1-testUTC
+# Required arguments are enforced.
+expect_exit 2 "run-probe without --bucket" \
+  env APPMOD_DRY_RUN=1 bash scripts/run-probe.sh --stage 0 --run-id s0-x \
+    --windows-instance i-0a --linux-instance i-0b
+expect_exit 2 "run-probe without --windows-instance" \
+  env APPMOD_DRY_RUN=1 bash scripts/run-probe.sh --stage 0 --run-id s0-x \
+    --linux-instance i-0b --bucket b
+
+# --- record-boundary.sh: the dry-run must BUILD the REST GETs and write captured values -----------
+printf 'inv-content\n' >"$TMP/wininv.json"
+RB_OUT="$(APPMOD_DRY_RUN=1 bash scripts/ontap/record-boundary.sh --boundary b0 \
+  --run-id s0-rbtest --mgmt-ip 203.0.113.5 --svm appmodsvm --volume appdata \
+  --windows-inventory "$TMP/wininv.json" 2>&1)"
+check_contains "record-boundary GETs the ONTAP version" \
+  "/api/cluster?fields=version" "$RB_OUT"
+check_contains "record-boundary GETs the volume list with snaplock.type" \
+  "snapshot_locking_enabled,snaplock.type" "$RB_OUT"
+check_contains "record-boundary GETs the snapshot list" \
+  "/snapshots?fields=name,create_time" "$RB_OUT"
+check_absent "record-boundary never prints the credential" \
+  "fsxadmin:\$ONTAP_PW" "$RB_OUT"
+# The written record carries real inventory SHA and NO <...> placeholders.
+if python3 - <<'PY'
+import json, sys
+d = json.load(open(".private/runs/s0-rbtest/b0.json", encoding="utf-8"))
+raw = json.dumps(d)
+ok = ("<" not in raw) \
+  and d["inventories"]["windows"]["sha256"] \
+  and d["security_style"] == "ntfs" \
+  and d["snapshot_locking_enabled"] is False \
+  and "boundary" in d
+sys.exit(0 if ok else 1)
+PY
+then
+  echo "ok: record-boundary writes an inventory SHA and no <...> placeholders"
+else
+  echo "FAIL: record-boundary record has placeholders or missing inventory SHA" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+# It feeds check-invariant.py cleanly.
+expect_exit 0 "record-boundary output feeds check-invariant.py" \
+  python3 scripts/check-invariant.py \
+    --baseline .private/runs/s0-rbtest/b0.json --boundary .private/runs/s0-rbtest/b0.json
+rm -rf .private/runs/s0-rbtest
+expect_exit 2 "record-boundary without --run-id" \
+  env APPMOD_DRY_RUN=1 bash scripts/ontap/record-boundary.sh --boundary b0 --mgmt-ip 203.0.113.5
+
 echo "----"
 if [ "$FAILURES" -ne 0 ]; then
   echo "dryrun_shell_tests: $FAILURES failure(s)" >&2
