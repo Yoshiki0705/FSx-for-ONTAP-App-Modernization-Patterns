@@ -20,6 +20,27 @@ snapshot locking には AWS API のパラメータがないので、cfn-guard �
 段階 2 の間は `fsxadmin` の到達経路を塞ぎ、各段階の境界と削除前に全ボリュームを列挙して
 ロックが無効であることを確かめる。
 
+## 実測した ONTAP の版
+
+> 証拠区分: `verified`（2026-10-07、ap-northeast-1、`SINGLE_AZ_1`、1,024 GiB / 128 MBps）。
+
+この検証のファイルシステムは、CloudFormation で版を指定せずに作成し、`NetApp Release 9.19.1P2`
+（ビルド日 2026-08-19）で動いていた。段階 0 と段階 1 の境界記録（`b0`、`b1`）に加え、削除直前の
+2026-10-07 17:06 UTC にも `GET /api/cluster?fields=version` で読み、同じ値だった。
+
+- 段階 0〜1 の結果は、すべてこの版での値である。Hub が引き継いでいる知見の基準は 9.17.1P7D1 で、
+  この検証の版はそれより新しい。
+- 次の 2 点は 9.19.1P2 で確かめた。SnapLock でないボリュームの `snaplock.type` は `non_snaplock`
+  を返した。ドメインコントローラーの発見は `/api/protocols/cifs/domains/{svm.uuid}?fields=discovered_servers`
+  で確認でき、`/api/protocols/active-directory` は 0 件を返した。
+- 1 回の作成で観測した版であり、新しく作るファイルシステムが常に 9.19.1P2 になるとは言えない。
+- 版は AWS 管理面の API からは読めなかった。`describe-file-systems` の `OntapConfiguration` が返したキーは
+  `DeploymentType`、`DiskIopsConfiguration`、`Endpoints`、`HAPairs`、`PreferredSubnetId`、
+  `ThroughputCapacity`、`ThroughputCapacityPerHAPair`、`WeeklyMaintenanceStartTime` で、版を示す
+  キーはなかった（2026-10-07）。版を確かめるには、VPC 内から管理エンドポイントへ届くホストで、
+  `fsxadmin` の資格情報を使い、ONTAP REST の `GET /api/cluster?fields=version` か ONTAP CLI の
+  `version` を実行する。
+
 ## 環境の構成（予定）
 
 | 要素 | 構成 |

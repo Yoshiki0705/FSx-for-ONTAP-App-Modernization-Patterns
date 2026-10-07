@@ -22,6 +22,30 @@ Snapshot locking has no AWS API parameter, so cfn-guard cannot stop it. During s
 path is closed off, and at every stage boundary and before deletion all volumes are enumerated to
 confirm locking is disabled.
 
+## Measured ONTAP version
+
+> Evidence tier: `verified` (2026-10-07, ap-northeast-1, `SINGLE_AZ_1`, 1,024 GiB / 128 MBps).
+
+The file system for this verification was created by CloudFormation without specifying a version,
+and ran `NetApp Release 9.19.1P2` (build date 2026-08-19). The stage-0 and stage-1 boundary
+records (`b0`, `b1`) captured it, and a direct `GET /api/cluster?fields=version` at
+2026-10-07 17:06 UTC, just before deletion, returned the same value.
+
+- All stage 0-1 results were measured on this version. The baseline for findings carried over by
+  the Hub is 9.17.1P7D1; this verification ran on a newer version.
+- Two behaviors were confirmed on 9.19.1P2. `snaplock.type` on a non-SnapLock volume returned
+  `non_snaplock`. Domain controller discovery could be confirmed through
+  `/api/protocols/cifs/domains/{svm.uuid}?fields=discovered_servers`, while
+  `/api/protocols/active-directory` returned 0 records.
+- This is the version observed for one creation. It does not show that every newly created file
+  system gets 9.19.1P2.
+- The version could not be read from the AWS management API. The keys `describe-file-systems` returned
+  under `OntapConfiguration` were `DeploymentType`, `DiskIopsConfiguration`, `Endpoints`,
+  `HAPairs`, `PreferredSubnetId`, `ThroughputCapacity`, `ThroughputCapacityPerHAPair` and
+  `WeeklyMaintenanceStartTime`, with no version key (2026-10-07). To check the version, run the
+  ONTAP REST call `GET /api/cluster?fields=version` or the ONTAP CLI command `version`, from a host
+  inside the VPC that can reach the management endpoint, using the `fsxadmin` credentials.
+
 ## Planned environment
 
 | Element | Configuration |
