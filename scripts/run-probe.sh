@@ -59,7 +59,6 @@ if [ -z "$BUCKET" ]; then echo "run-probe: --bucket is required" >&2; usage; exi
 
 OUT_DIR=".private/runs/$RUN_ID"
 mkdir -p "$OUT_DIR"
-S3_PREFIX="s3://$BUCKET/probe/$RUN_ID"
 
 run_aws() {
   if [ -n "$DRY_RUN" ]; then
@@ -70,52 +69,82 @@ run_aws() {
 }
 
 # Start one probe over SSM Run Command. $1 instance, $2 document, $3 the probe command line. The
-# probe prints its appmod-probe/1 JSON to stdout; the Run Command uploads stdout to the artifacts
-# bucket via OutputS3BucketName/OutputS3KeyPrefix, which is how each side's JSON reaches S3.
+# probe prints its appmod-probe/1 JSON to stdout; the Run Command also uploads stdout to the
+# artifacts bucket (OutputS3BucketName/OutputS3KeyPrefix) for the record. Prints the command id.
 send_probe() {
   local instance="$1" document="$2" command_line="$3" key_prefix="$4"
-  run_aws ssm send-command \
+  if [ -n "$DRY_RUN" ]; then
+    echo "DRY-RUN: aws --region $REGION ssm send-command --instance-ids $instance" \
+      "--document-name $document --parameters commands=[\"$command_line\"]" \
+      "--output-s3-bucket-name $BUCKET --output-s3-key-prefix probe/$RUN_ID/$key_prefix" >&2
+    echo "dry-run-command-id"
+    return 0
+  fi
+  aws --region "$REGION" ssm send-command \
     --instance-ids "$instance" \
     --document-name "$document" \
     --comment "appmod probe $RUN_ID stage $STAGE" \
     --parameters "commands=[\"$command_line\"]" \
     --output-s3-bucket-name "$BUCKET" \
-    --output-s3-key-prefix "probe/$RUN_ID/$key_prefix"
+    --output-s3-key-prefix "probe/$RUN_ID/$key_prefix" \
+    --query 'Command.CommandId' --output text
 }
 
-# Windows DocIntake.Probe over SMB (writer / holder on the Windows side). The launcher establishes
-# the appsvc SMB session first (SSM runs as SYSTEM, which otherwise cannot reach the share) and
-# invokes the deployed Probe. probe-launch.ps1 must be staged at C:\appmod\probe-launch.ps1.
-send_probe "$WIN_INSTANCE" "AWS-RunPowerShellScript" \
-  "powershell -ExecutionPolicy Bypass -File C:\\appmod\\probe-launch.ps1 -Stage $STAGE -RunId $RUN_ID -Role holder -SvmNetbios $SVM_NETBIOS -Region $REGION" \
-  "windows"
+# Wait for an SSM command to finish on an instance and write its stdout (the probe's appmod-probe/1
+# JSON) to $OUT_DIR/<side>.json. The SSM output object in S3 is literally named "stdout" under a
+# nested key, so rather than glob for *.json this reads StandardOutputContent after the command
+# reaches a terminal state. A nonzero ResponseCode or a non-Success status is surfaced.
+collect_probe() {
+  local command_id="$1" instance="$2" side="$3"
+  if [ -n "$DRY_RUN" ]; then
+    echo "DRY-RUN: aws --region $REGION ssm wait command-executed --command-id $command_id --instance-id $instance" >&2
+    return 0
+  fi
+  # ssm wait command-executed returns nonzero when the command fails; capture status either way.
+  aws --region "$REGION" ssm wait command-executed \
+    --command-id "$command_id" --instance-id "$instance" 2>/dev/null || true
+  local status rc
+  status="$(aws --region "$REGION" ssm get-command-invocation \
+    --command-id "$command_id" --instance-id "$instance" --query 'Status' --output text)"
+  rc="$(aws --region "$REGION" ssm get-command-invocation \
+    --command-id "$command_id" --instance-id "$instance" --query 'ResponseCode' --output text)"
+  aws --region "$REGION" ssm get-command-invocation \
+    --command-id "$command_id" --instance-id "$instance" \
+    --query 'StandardOutputContent' --output text | sed 's/\r$//' >"$OUT_DIR/$side.json"
+  echo "run-probe: $side status=$status rc=$rc -> $OUT_DIR/$side.json"
+}
 
-# Linux probe_peer.py over SMB (contender / reader on the Linux side). The launcher mounts the SMB
-# share as appsvc (sec=ntlmssp, falling back to krb5) and invokes probe_peer.py. probe-launch.sh
-# must be staged at /opt/appmod/probe-launch.sh.
-send_probe "$LNX_INSTANCE" "AWS-RunShellScript" \
+# Windows DocIntake.Probe over SMB (holder). The launcher establishes the appsvc SMB session first
+# (SSM runs as SYSTEM, which otherwise cannot reach the share) and invokes the deployed Probe.
+WIN_CMD_ID="$(send_probe "$WIN_INSTANCE" "AWS-RunPowerShellScript" \
+  "powershell -ExecutionPolicy Bypass -File C:\\appmod\\probe-launch.ps1 -Stage $STAGE -RunId $RUN_ID -Role holder -SvmNetbios $SVM_NETBIOS -Region $REGION" \
+  "windows")"
+
+# Linux probe_peer.py over SMB (contender). The launcher mounts the SMB share as appsvc
+# (sec=ntlmssp, falling back to krb5) and invokes probe_peer.py.
+LNX_SMB_CMD_ID="$(send_probe "$LNX_INSTANCE" "AWS-RunShellScript" \
   "bash /opt/appmod/probe-launch.sh --store smb --stage $STAGE --role contender --run-id $RUN_ID --region $REGION --svm-netbios $SVM_NETBIOS" \
-  "linux-smb"
+  "linux-smb")"
 
 # Stage 1 and later add the NFS mount on the Linux side.
+LNX_NFS_CMD_ID=""
 if [ "$STAGE" -ge 1 ]; then
-  send_probe "$LNX_INSTANCE" "AWS-RunShellScript" \
+  LNX_NFS_CMD_ID="$(send_probe "$LNX_INSTANCE" "AWS-RunShellScript" \
     "bash /opt/appmod/probe-launch.sh --store nfs --stage $STAGE --role reader --run-id $RUN_ID --region $REGION --svm-netbios $SVM_NETBIOS" \
-    "linux-nfs"
+    "linux-nfs")"
 fi
 
 echo "run-probe: role pairs holder/contender (file-locking), writer/reader (write-visibility)"
 echo "run-probe: record each host NTP offset; a difference smaller than the offset is 'no difference'"
 
-# Collect each side's JSON from the artifacts bucket into the run directory.
-run_aws s3 cp "$S3_PREFIX/windows/" "$OUT_DIR/" --recursive --exclude '*' --include '*.json'
-run_aws s3 cp "$S3_PREFIX/linux-smb/" "$OUT_DIR/" --recursive --exclude '*' --include '*.json'
-if [ "$STAGE" -ge 1 ]; then
-  run_aws s3 cp "$S3_PREFIX/linux-nfs/" "$OUT_DIR/" --recursive --exclude '*' --include '*.json'
+# Wait for each command to finish and collect its stdout as the side's JSON.
+collect_probe "$WIN_CMD_ID" "$WIN_INSTANCE" "windows"
+collect_probe "$LNX_SMB_CMD_ID" "$LNX_INSTANCE" "linux-smb"
+if [ "$STAGE" -ge 1 ] && [ -n "$LNX_NFS_CMD_ID" ]; then
+  collect_probe "$LNX_NFS_CMD_ID" "$LNX_INSTANCE" "linux-nfs"
 fi
-
-# Merge the collected per-host JSON into one per-behavior record. Under dry-run no file was copied,
-# so a tiny in-script fixture pair is merged instead, which still proves the merge forces
+# Merge the collected per-host JSON into one per-behavior record. Under dry-run no command ran, so a
+# tiny in-script fixture pair is merged instead, which still proves the merge forces
 # topology=cross-host on the two-client behaviors and keeps the three-valued outcome.
 merge_results() {
   if [ -n "$DRY_RUN" ]; then

@@ -105,12 +105,28 @@ def case_sensitivity(root: Path) -> dict:
 
 def path_separator(root: Path) -> dict:
     # Write a name containing a backslash and report the resulting file name on this filesystem.
+    # When the OS/protocol rejects the name, that rejection IS the observation: record it as a
+    # measured result (rejected=true, the attempted name, the errno), not as outcome=error. error is
+    # reserved for the probe failing to observe anything at all.
     base = root / "probe"
     base.mkdir(parents=True, exist_ok=True)
     name = "sep\\check.txt"
     target = base / name
-    target.write_text("x", encoding="utf-8")
-    return {"written_name": name, "exists_literal": (base / name).exists()}
+    try:
+        target.write_text("x", encoding="utf-8")
+    except OSError as exc:
+        return {
+            "attempted_name": name,
+            "rejected": True,
+            "exception_type": type(exc).__name__,
+            "errno": exc.errno,
+        }
+    return {
+        "attempted_name": name,
+        "rejected": False,
+        "written_name": name,
+        "exists_literal": (base / name).exists(),
+    }
 
 
 def file_locking(root: Path) -> dict:

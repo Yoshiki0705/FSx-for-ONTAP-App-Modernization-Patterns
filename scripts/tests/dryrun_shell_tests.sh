@@ -314,7 +314,7 @@ expect_exit 2 "stage0-smb without mgmt-ip or fs-id" \
 # design.md; the dry-run asserts the assertion is wired (the GET above). Exit 4 is proven by the
 # assert_dc_discovered body reading discovered_servers, exercised live.
 
-# --- run-probe.sh: the dry-run must BUILD send-command and s3 cp ----------------------------------
+# --- run-probe.sh: the dry-run must BUILD send-command, wait, and merge ----------------------------------
 # Short placeholder instance ids (not 17-char hex) so the pre-commit secret scan does not read them
 # as real EC2 instance ids. The merge logic does not depend on the id format.
 RP_WIN="i-win"
@@ -334,8 +334,8 @@ check_contains "run-probe adds the NFS probe at stage 1" \
   "probe-launch.sh --store nfs" "$RP_OUT"
 check_contains "run-probe uploads probe output to the artifacts bucket" \
   "--output-s3-bucket-name appmod-artifacts-example" "$RP_OUT"
-check_contains "run-probe copies results back with s3 cp" \
-  "s3 cp s3://appmod-artifacts-example/probe/s1-testUTC" "$RP_OUT"
+check_contains "run-probe waits for the command before collecting" \
+  "ssm wait command-executed" "$RP_OUT"
 check_contains "run-probe merges the two sides" \
   "merged 2 behavior(s)" "$RP_OUT"
 # The merged record forces topology=cross-host on the two-client behaviors.
