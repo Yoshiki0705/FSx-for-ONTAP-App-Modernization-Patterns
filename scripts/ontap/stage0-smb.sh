@@ -100,23 +100,25 @@ read_fsxadmin_password() {
 # curl against the ONTAP REST API. $1 method, $2 path (begins with /), $3 optional JSON body.
 # Under dry-run the exact method, endpoint and body are printed with the credential redacted and
 # nothing is sent. Otherwise the fsxadmin password (held in $ONTAP_PW) is used for basic auth and
-# never appears in argv of any logged line.
+# never appears in argv of any logged line. -k is required because the FSx for ONTAP management
+# endpoint presents a certificate whose CN is the management DNS name, and the REST calls reach it
+# by the management IP resolved from the FSx for ONTAP API, so IP-based hostname verification cannot match.
 ontap() {
   local method="$1" path="$2" body="${3:-}"
   local url="https://$MGMT_IP$path"
   if [ -n "$DRY_RUN" ]; then
     if [ -n "$body" ]; then
-      echo "DRY-RUN: curl -sS -u fsxadmin:<redacted> -X $method $url -d '$body'"
+      echo "DRY-RUN: curl -sS -k -u fsxadmin:<redacted> -X $method $url -d '$body'"
     else
-      echo "DRY-RUN: curl -sS -u fsxadmin:<redacted> -X $method $url"
+      echo "DRY-RUN: curl -sS -k -u fsxadmin:<redacted> -X $method $url"
     fi
     return 0
   fi
   if [ -n "$body" ]; then
-    curl -sS -u "fsxadmin:$ONTAP_PW" -X "$method" "$url" \
+    curl -sS -k -u "fsxadmin:$ONTAP_PW" -X "$method" "$url" \
       -H 'Content-Type: application/json' -d "$body"
   else
-    curl -sS -u "fsxadmin:$ONTAP_PW" -X "$method" "$url"
+    curl -sS -k -u "fsxadmin:$ONTAP_PW" -X "$method" "$url"
   fi
 }
 
@@ -125,7 +127,7 @@ ontap() {
 ontap_exists() {
   local path="$1"
   if [ -n "$DRY_RUN" ]; then
-    echo "DRY-RUN: curl -sS -u fsxadmin:<redacted> https://$MGMT_IP$path   # check-then-create"
+    echo "DRY-RUN: curl -sS -k -u fsxadmin:<redacted> https://$MGMT_IP$path   # check-then-create"
     return 1
   fi
   local out
@@ -138,15 +140,28 @@ except Exception:
 sys.exit(0 if data.get("num_records", len(data.get("records", []))) else 1)'
 }
 
-# Resolve the SVM UUID (needed for the cifs/domains discovery assertion). Under dry-run a
+# Resolve the SVM UUID (needed for the cifs/domains discovery assertion and for the share-ACL and
+# file-security endpoints, whose path segment is the SVM UUID, not the name). Under dry-run a
 # placeholder is returned.
 svm_uuid() {
   if [ -n "$DRY_RUN" ]; then
-    echo "DRY-RUN: curl -sS -u fsxadmin:<redacted> https://$MGMT_IP/api/svm/svms?name=$SVM&fields=uuid" >&2
+    echo "DRY-RUN: curl -sS -k -u fsxadmin:<redacted> https://$MGMT_IP/api/svm/svms?name=$SVM&fields=uuid" >&2
     printf '<svm-uuid>'
     return 0
   fi
   ontap GET "/api/svm/svms?name=$SVM&fields=uuid" \
+    | python3 -c 'import json,sys; r=json.load(sys.stdin).get("records",[]); print(r[0]["uuid"] if r else "")'
+}
+
+# Resolve the target volume UUID. The files/{path} endpoint takes the volume UUID in its path, not
+# the name (ONTAP REST rejects the name for volume.uuid). Under dry-run a placeholder is returned.
+vol_uuid() {
+  if [ -n "$DRY_RUN" ]; then
+    echo "DRY-RUN: curl -sS -k -u fsxadmin:<redacted> https://$MGMT_IP/api/storage/volumes?name=$VOLUME&fields=uuid" >&2
+    printf '<appdata-uuid>'
+    return 0
+  fi
+  ontap GET "/api/storage/volumes?name=$VOLUME&fields=uuid" \
     | python3 -c 'import json,sys; r=json.load(sys.stdin).get("records",[]); print(r[0]["uuid"] if r else "")'
 }
 
@@ -157,7 +172,7 @@ assert_dc_discovered() {
   local uuid; uuid="$(svm_uuid)"
   local path="/api/protocols/cifs/domains/$uuid?fields=discovered_servers"
   if [ -n "$DRY_RUN" ]; then
-    echo "DRY-RUN: curl -sS -u fsxadmin:<redacted> https://$MGMT_IP$path   # require an ms_dc in state ok"
+    echo "DRY-RUN: curl -sS -k -u fsxadmin:<redacted> https://$MGMT_IP$path   # require an ms_dc in state ok"
     return 0
   fi
   local resp; resp="$(ontap GET "$path")"
@@ -184,14 +199,23 @@ create_share() {
 }
 
 set_share_acl() {
-  # Share-level ACL: appsvc full_control, appreader read. PATCH is idempotent on the share-acls
-  # collection; a GET first keeps the dry-run output showing a check-then-set.
+  # Share-level ACL: appsvc full_control, appreader read. The acls collection path segment is the
+  # SVM UUID (the name is rejected for svm.uuid). Each ACE is created only when absent, so a re-run
+  # does not 409 on a duplicate.
   note "set share ACL on appdata: APPMOD\\\\appsvc full_control, APPMOD\\\\appreader read"
-  ontap_exists "/api/protocols/cifs/shares/$SVM/appdata/acls" || true
-  ontap POST "/api/protocols/cifs/shares/$SVM/appdata/acls" \
-    "{\"permission\":\"full_control\",\"type\":\"windows\",\"user_or_group\":\"APPMOD\\\\appsvc\"}"
-  ontap POST "/api/protocols/cifs/shares/$SVM/appdata/acls" \
-    "{\"permission\":\"read\",\"type\":\"windows\",\"user_or_group\":\"APPMOD\\\\appreader\"}"
+  local base="/api/protocols/cifs/shares/$SVM_UUID/appdata/acls"
+  if ontap_exists "$base?user_or_group=APPMOD\\appsvc"; then
+    note "share ACE for APPMOD\\appsvc already present; left unchanged"
+  else
+    ontap POST "$base" \
+      "{\"permission\":\"full_control\",\"type\":\"windows\",\"user_or_group\":\"APPMOD\\\\appsvc\"}"
+  fi
+  if ontap_exists "$base?user_or_group=APPMOD\\appreader"; then
+    note "share ACE for APPMOD\\appreader already present; left unchanged"
+  else
+    ontap POST "$base" \
+      "{\"permission\":\"read\",\"type\":\"windows\",\"user_or_group\":\"APPMOD\\\\appreader\"}"
+  fi
 }
 
 set_ntfs_acls() {
@@ -199,28 +223,38 @@ set_ntfs_acls() {
   # appreader read, and an explicit deny-write ACE for appreader so a write is denied even if an
   # allow ACE elsewhere would permit it.
   note "set NTFS ACLs on /$VOLUME: appsvc modify (allow), appreader read (allow) + deny-write ACE"
-  local path="/api/protocols/file-security/permissions/$SVM/%2F$VOLUME"
-  ontap POST "$path" \
+  # The file-security permissions path segment is the SVM UUID (the name is rejected for svm.uuid).
+  # Applying the full ACL set replaces the DACL, so a re-run is idempotent.
+  local path="/api/protocols/file-security/permissions/$SVM_UUID/%2F$VOLUME"
+  # Each ACE sets apply_to = this_folder + sub_folders + files so the inherited ACEs on files under
+  # /appdata carry data rights. Without an explicit apply_to the inherited file ACEs end up scoped
+  # to this_folder only, which lets a directory be listed but denies reading file content (observed
+  # live 2026-10-07 over both SMB clients). propagation_mode "propagate" pushes the change onto the
+  # existing children (seed/ was written before this fix).
+  # appsvc gets modify, appreader gets read; both via the simple "rights" model (this ONTAP build
+  # rejects the granular advanced_rights.read_attributes keys). The deny ACE uses advanced_rights
+  # for the write/append bits only.
+  local apply_to="\"apply_to\":{\"this_folder\":true,\"sub_folders\":true,\"files\":true}"
+  ontap POST "$path?propagation_mode=propagate" \
     "{\"acls\":[\
-{\"access\":\"access_allow\",\"user\":\"APPMOD\\\\appsvc\",\"advanced_rights\":{\"read_data\":true,\"write_data\":true,\"append_data\":true,\"delete\":true}},\
-{\"access\":\"access_allow\",\"user\":\"APPMOD\\\\appreader\",\"advanced_rights\":{\"read_data\":true}},\
-{\"access\":\"access_deny\",\"user\":\"APPMOD\\\\appreader\",\"advanced_rights\":{\"write_data\":true,\"append_data\":true}}\
+{\"access\":\"access_allow\",\"user\":\"APPMOD\\\\appsvc\",$apply_to,\"rights\":\"modify\"},\
+{\"access\":\"access_allow\",\"user\":\"APPMOD\\\\appreader\",$apply_to,\"rights\":\"read\"},\
+{\"access\":\"access_deny\",\"user\":\"APPMOD\\\\appreader\",$apply_to,\"advanced_rights\":{\"write_data\":true,\"append_data\":true}}\
 ]}"
 }
 
 create_directories() {
-  # seed/, probe/, out/ on the volume. Each is created with the file/directory endpoint; a GET on
-  # the path first keeps the create idempotent.
+  # seed/, probe/, out/ on the volume. The files/{path} endpoint takes the volume UUID in its path
+  # (the name is rejected for volume.uuid). A GET on the path first keeps the create idempotent; the
+  # GET returns the . and .. entries once the directory exists.
   local dir
   for dir in seed probe out; do
-    if ontap_exists "/api/storage/volumes/$VOLUME/files/$dir"; then
+    if ontap_exists "/api/storage/volumes/$VOL_UUID/files/$dir"; then
       note "directory $dir/ already present; left unchanged"
       continue
     fi
     note "create directory $dir/ on $VOLUME"
-    ontap POST "/api/protocols/file-security/permissions/$SVM/%2F$VOLUME%2F$dir" \
-      "{\"svm\":{\"name\":\"$SVM\"}}" >/dev/null 2>&1 || true
-    ontap POST "/api/storage/volumes/$VOLUME/files/$dir" \
+    ontap POST "/api/storage/volumes/$VOL_UUID/files/$dir" \
       "{\"type\":\"directory\",\"unix_permissions\":\"0775\"}"
   done
 }
@@ -244,7 +278,7 @@ create_itclone_role() {
   fi
   note "create account appmod-itclone role=appmod_itclone (password from appmod/ontap-itclone)"
   if [ -n "$DRY_RUN" ]; then
-    echo "DRY-RUN: curl -sS -u fsxadmin:<redacted> -X POST https://$MGMT_IP/api/security/accounts \\"
+    echo "DRY-RUN: curl -sS -k -u fsxadmin:<redacted> -X POST https://$MGMT_IP/api/security/accounts \\"
     echo "           -d '{\"name\":\"appmod-itclone\",\"owner\":{\"name\":\"$SVM\"},\"role\":\"appmod_itclone\",\"applications\":[{\"application\":\"http\"}],\"password\":\"<redacted>\"}'"
     return 0
   fi
@@ -288,6 +322,17 @@ if [ -z "$DRY_RUN" ]; then
 fi
 
 assert_dc_discovered
+
+# Resolve the SVM and volume UUIDs once; the share-ACL, file-security and files/{path} endpoints
+# take the UUID in their path, not the name.
+SVM_UUID="$(svm_uuid)"
+VOL_UUID="$(vol_uuid)"
+if [ -z "$DRY_RUN" ]; then
+  if [ -z "$SVM_UUID" ]; then echo "stage0-smb: could not resolve the SVM UUID for $SVM" >&2; exit 1; fi
+  if [ -z "$VOL_UUID" ]; then echo "stage0-smb: could not resolve the volume UUID for $VOLUME" >&2; exit 1; fi
+fi
+note "resolved SVM UUID and volume UUID for the UUID-keyed endpoints"
+
 create_share
 set_share_acl
 set_ntfs_acls

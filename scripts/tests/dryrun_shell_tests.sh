@@ -281,16 +281,18 @@ check_contains "stage0-smb cifs/domains requests discovered_servers" \
 # The real create calls are built.
 check_contains "stage0-smb creates the SMB share appdata (POST)" \
   "POST https://203.0.113.5/api/protocols/cifs/shares" "$S0_OUT"
-check_contains "stage0-smb sets NTFS ACLs via file-security permissions" \
-  "/api/protocols/file-security/permissions/appmodsvm/%2Fappdata" "$S0_OUT"
+# The file-security and files endpoints take the SVM / volume UUID in the path (the name is
+# rejected by ONTAP REST). In dry-run the UUIDs are placeholders.
+check_contains "stage0-smb sets NTFS ACLs via file-security permissions (SVM UUID in path)" \
+  "/api/protocols/file-security/permissions/<svm-uuid>/%2Fappdata" "$S0_OUT"
 check_contains "stage0-smb includes an explicit deny-write ACE for appreader" \
   '"access":"access_deny","user":"APPMOD\\appreader"' "$S0_OUT"
-check_contains "stage0-smb creates the seed/ directory" \
-  "/api/storage/volumes/appdata/files/seed" "$S0_OUT"
-check_contains "stage0-smb creates the probe/ directory" \
-  "/api/storage/volumes/appdata/files/probe" "$S0_OUT"
-check_contains "stage0-smb creates the out/ directory" \
-  "/api/storage/volumes/appdata/files/out" "$S0_OUT"
+check_contains "stage0-smb creates the seed/ directory (volume UUID in path)" \
+  "/api/storage/volumes/<appdata-uuid>/files/seed" "$S0_OUT"
+check_contains "stage0-smb creates the probe/ directory (volume UUID in path)" \
+  "/api/storage/volumes/<appdata-uuid>/files/probe" "$S0_OUT"
+check_contains "stage0-smb creates the out/ directory (volume UUID in path)" \
+  "/api/storage/volumes/<appdata-uuid>/files/out" "$S0_OUT"
 check_contains "stage0-smb creates the appmod_itclone REST role" \
   "appmod_itclone" "$S0_OUT"
 check_contains "stage0-smb creates the appmod_readonly REST role" \

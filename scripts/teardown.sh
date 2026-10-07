@@ -65,6 +65,33 @@ step() {
 
 aws_r() { aws --region "$REGION" "$@"; }
 
+# Out-of-band inline policies added to the Windows role on an environment created before
+# templates/base.yaml carried the grants (read the app-users secret; access the artifacts bucket).
+# On a fresh environment these grants are baked into the role, so the policies do not exist and the
+# deletes are no-ops.
+OUT_OF_BAND_WINDOWS_POLICIES="appmod-read-app-users-secret appmod-artifacts-bucket-access"
+
+remove_out_of_band_app_users_policy() {
+  local role
+  role="$(aws_r cloudformation describe-stack-resources --stack-name "$BASE_STACK" \
+    --query "StackResources[?LogicalResourceId=='WindowsRole'].PhysicalResourceId" \
+    --output text 2>/dev/null || true)"
+  if [ -z "$role" ] || [ "$role" = "None" ]; then
+    echo "    Windows role not found on $BASE_STACK; nothing to remove"
+    return 0
+  fi
+  local policy
+  for policy in $OUT_OF_BAND_WINDOWS_POLICIES; do
+    if aws_r iam get-role-policy --role-name "$role" \
+        --policy-name "$policy" >/dev/null 2>&1; then
+      aws_r iam delete-role-policy --role-name "$role" --policy-name "$policy"
+      echo "    removed inline policy $policy from $role"
+    else
+      echo "    inline policy $policy absent on $role (fresh env); no-op"
+    fi
+  done
+}
+
 teardown_after_failed_create() {
   echo "teardown: after-failed-create path (file system exists, no Linux EC2)"
   echo "- 1' no Linux EC2 to run check-no-locking.sh. Confirm no ONTAP operation ran"
@@ -97,6 +124,8 @@ teardown_full() {
       --ontap-configuration SkipFinalBackup=true
   step "7 empty the artifacts bucket" \
     echo "aws s3 rm s3://appmod-artifacts-123456789012-ap-northeast-1 --recursive"
+  step "7b remove the out-of-band Windows-role inline policies (app-users read, artifacts bucket) if present" \
+    remove_out_of_band_app_users_policy
   step "8 delete $BASE_STACK" aws_r cloudformation delete-stack --stack-name "$BASE_STACK"
   step "9 delete the four secrets with --force-delete-without-recovery" \
     echo "for each secret: aws secretsmanager delete-secret --force-delete-without-recovery"

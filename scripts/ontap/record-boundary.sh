@@ -96,15 +96,17 @@ read_ontap_password() {
 }
 
 # GET a path over the ONTAP REST API. Under dry-run the GET is printed (credential redacted) and an
-# empty JSON object is returned so the capture code runs without a call.
+# empty JSON object is returned so the capture code runs without a call. -k is required because the
+# management endpoint's certificate CN is the management DNS name while this reaches it by the
+# management IP, so IP-based hostname verification cannot match.
 ontap_get() {
   local path="$1"
   if [ -n "$DRY_RUN" ]; then
-    echo "DRY-RUN: curl -sS -u fsxadmin:<redacted> https://$MGMT_IP$path" >&2
+    echo "DRY-RUN: curl -sS -k -u fsxadmin:<redacted> https://$MGMT_IP$path" >&2
     printf '{}'
     return 0
   fi
-  curl -sS -u "fsxadmin:$ONTAP_PW" "https://$MGMT_IP$path"
+  curl -sS -k -u "fsxadmin:$ONTAP_PW" "https://$MGMT_IP$path"
 }
 
 echo "record-boundary: $BOUNDARY run $RUN_ID from ${MGMT_IP:-<unresolved>} (read-only)"
