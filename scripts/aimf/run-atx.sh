@@ -18,10 +18,13 @@
 #
 # The invocation is assembled from the public AWS Transform custom user guide: the non-interactive
 # form `atx custom def exec -n <name> -p <path> -x -t` (Getting Started; Command Reference) and the
-# managed transformation name AWS/comprehensive-codebase-analysis (Managed Transformations). Running
-# that form for this transformation, without a build command (-c), has not been done: whether the
-# transformation is offered in ap-northeast-1 (U8), its price (U9), reachability and IAM (U10) and the
-# GA notice (U11) are open until task 2.4. Until then the real path fails closed. Task 2.4 writes the
+# managed transformation name AWS/comprehensive-codebase-analysis (Managed Transformations). Re-read
+# on 2026-10-07: the Command Reference lists -n, -p, -x and -t and does not mark -c required, the
+# March 2026 GA notice gives `atx custom def exec -n AWS/comprehensive-codebase-analysis -p` as the
+# way to start, and Getting Started lists ap-northeast-1 among the service's Regions (U8, U11
+# documented). Running that form for this transformation, without a build command (-c), has not been
+# done: whether the Tokyo registry lists it (U8), whether $0.035 per agent minute applies to it (U9),
+# and reachability and IAM (U10) stay open until task 2.4. Until then the real path fails closed. Task 2.4 writes the
 # verification record (.private/runs/atx-invocation-verified.json) after confirming, with atx
 # installed, `atx --version`, `atx custom def list --json` listing the transformation, and
 # `atx custom def exec --help` accepting these flags. The record must name this exact invocation.
