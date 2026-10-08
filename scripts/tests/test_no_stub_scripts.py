@@ -128,13 +128,67 @@ class NonInvocations(unittest.TestCase):
 
     def test_run_echo_through_a_real_runner_is_a_stub(self):
         runner = 'run() {\n  if [ -n "$DRY_RUN" ]; then echo "DRY-RUN: $*"; return 0; fi\n  "$@"\n}\n'
-        self.assertEqual(len(one(runner + 'run echo "aws ssm send-command"\n')), 1)
+        errors = one(runner + 'run echo "aws ssm send-command"\n')
+        self.assertEqual(len(errors), 2, errors)
+        self.assertIn("a stub", errors[0])
+        self.assertIn("line 8: the real-mode runner call `run echo ...`", errors[1])
         self.assertEqual(one(runner + "run aws ssm send-command\n"), [])
 
     def test_runner_shift_offset(self):
         step = 'step() {\n  local d="$1"; shift\n  echo "- $d"\n  "$@"\n}\n'
         self.assertEqual(one(step + 'step "list" aws s3 ls\n'), [])
-        self.assertEqual(len(one(step + "step aws echo hi\n")), 1)
+        errors = one(step + "step aws echo hi\n")
+        self.assertEqual(len(errors), 2, errors)
+        self.assertIn("`step echo ...`", errors[1])
+
+
+class RunnerHandoffs(unittest.TestCase):
+    """Per-call rule: a runner handed a printing command is a stub step on its own.
+
+    The shape is the historical teardown.sh (before 8c716bc): `step` really runs "$@", most steps
+    hand it `aws_r ...`, and steps 4, 5, 7 and 9 handed it `echo "<intended command>"`.
+    """
+
+    TEARDOWN = (
+        'APPLY="${1:-}"\nREGION=ap-northeast-1\n'
+        'step() {\n  local description="$1"; shift\n  echo "- $description"\n'
+        '  if [ -z "$APPLY" ]; then\n    echo "    (report only)"\n    return 0\n  fi\n'
+        '  if [ -n "$DRY_RUN" ]; then\n    echo "    DRY-RUN: $*"\n    return 0\n  fi\n'
+        '  "$@"\n}\n'
+        'aws_r() { aws --region "$REGION" "$@"; }\n'
+        'step "6 delete appdata" \\\n  aws_r fsx delete-volume --volume-id vol-0123456789abcdef0\n'
+        'step "7 empty the artifacts bucket" \\\n  echo "aws s3 rm s3://bucket --recursive"\n'
+    )
+
+    def test_historical_teardown_shape_fails_despite_a_real_step(self):
+        errors = one(self.TEARDOWN)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("line 22: the real-mode runner call `step echo ...`", errors[0])
+
+    def test_teardown_shape_passes_when_every_step_is_real(self):
+        fixed = self.TEARDOWN.replace(
+            'echo "aws s3 rm s3://bucket --recursive"',
+            "aws_r s3 rm s3://bucket --recursive",
+        )
+        self.assertEqual(one(fixed), [])
+
+    def test_echo_only_function_and_nested_runner(self):
+        base = (
+            'note() { echo "note: $*"; }\n'
+            'say() { note "$@"; }\n'
+            'run() {\n  if [ -n "$DRY_RUN" ]; then return 0; fi\n  "$@"\n}\n'
+            'step() {\n  shift\n  "$@"\n}\n'
+            "aws s3 ls\n"
+        )
+        self.assertIn("`run say ...`", one(base + "run say aws s3 rm x\n")[0])
+        self.assertIn("`run step printf ...`", one(base + "run step d printf x\n")[0])
+        self.assertEqual(one(base + "run step d aws s3 ls\n"), [])
+
+    def test_dry_only_handoff_and_pure_scripts_are_exempt(self):
+        runner = 'run() { "$@"; }\naws s3 ls\n'
+        dry = 'if [ -n "$DRY_RUN" ]; then run echo "aws s3 rm x"; fi\n'
+        self.assertEqual(one(runner + dry), [])
+        self.assertEqual(one('run() { "$@"; }\nrun echo hi\n', "pure"), [])
 
     def test_comment_heredoc_and_quoted_string_do_not_count(self):
         text = (

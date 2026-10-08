@@ -27,6 +27,11 @@ sources with `.` / `source`, is a wrapper when its own real-mode body makes a re
 runs `"$@"` is a runner: a call to it counts only when the command it is handed (after the
 function's own `shift`s) is itself a real invocation, so `run echo aws ...` does not count.
 
+Per-call rule (in external and fail-closed scripts): a real-mode runner call whose handed command
+is `echo`, `printf` or an echo-only function (one whose real-mode body only prints, e.g. `note`) is
+an error on its own, whatever other calls in the script invoke. This is the step-level stub shape,
+`step "7 empty the bucket" echo "aws s3 rm ..."`, which a per-script count would absorb.
+
 What does not count as an invocation: anything that is only an argument (`echo aws ...`,
 `printf ... aws`, `note "aws ssm send-command ..."`), anything inside quotes that is not a command
 substitution (`remote="... aws s3 cp ..."` sent to another host), comments, here-document bodies,
@@ -50,8 +55,9 @@ Known limits (stated so that a pass is not read as more than it is):
   - Code after an early `return` / `exit` in a dry branch is "either mode", not "real-only". That
     is enough for counting invocations; a fail-closed exit must sit in an explicit real-only branch.
   - Reachability is not analysed: a real invocation inside a function that is never called still
-    counts. The gate is per script, so one real call satisfies it even if another step still only
-    echoes.
+    counts. Apart from the per-call runner rule, the gate is per script: one real call satisfies
+    it even if another step prints its intended operation with a bare `echo` / `note` instead of
+    handing it to a runner.
   - Command substitutions inside unquoted here-documents, `eval`, `bash -c "<string>"`, and
     commands built in variables (`"${CMD[@]}"`) are not analysed.
   - PowerShell scripts (*.ps1) are out of scope.
@@ -612,6 +618,14 @@ class FuncInfo:
     commands: list[Command] = field(default_factory=list)
     wrapper_of: str | None = None
     runner_offset: int | None = None  # set when the function runs "$@"
+    echo_only: bool = (
+        False  # its real-mode body only prints (echo / printf / other echo-only)
+    )
+
+
+# Commands that print, and commands that neither print nor do work, for the echo-only test.
+PRINTERS = frozenset({"echo", "printf"})
+NEUTRAL = frozenset({"local", "shift", "return", ":", "true"})
 
 
 def parse(path: Path) -> list[Command]:
@@ -721,6 +735,49 @@ def resolve_functions(funcs: dict[str, FuncInfo]) -> None:
                         info.wrapper_of = found
                         changed = True
                         break
+    # Echo-only: no wrapper, no runner, at least one print, and every real-mode command prints, is
+    # neutral, or calls another echo-only function. Resolved to a fixed point like the wrappers.
+    changed = True
+    while changed:
+        changed = False
+        for info in funcs.values():
+            if info.echo_only or info.wrapper_of or info.runner_offset is not None:
+                continue
+            names = [
+                strip_prefixes(cmd.words)[:1]
+                for cmd in info.commands
+                if is_real_mode(cmd)
+            ]
+            names = [n[0] for n in names if n]
+            printing = [
+                n for n in names if n in PRINTERS or (n in funcs and funcs[n].echo_only)
+            ]
+            if printing and all(n in NEUTRAL or n in printing for n in names):
+                info.echo_only = True
+                changed = True
+
+
+def echo_handoff(words: list[str], funcs: dict[str, FuncInfo]) -> str | None:
+    """Return "<runner> <cmd>" when `words` hands a runner a command that only prints.
+
+    `step "7 empty the bucket" echo "aws s3 rm ..."` runs `"$@"` for real and so executes `echo`.
+    Nested runners (`run step x echo ...`) are followed.
+    """
+    w = strip_prefixes(words)
+    if not w:
+        return None
+    info = funcs.get(w[0])
+    if info is None or info.runner_offset is None:
+        return None
+    handed = strip_prefixes(w[1 + info.runner_offset :])
+    if not handed:
+        return None
+    name = os.path.basename(handed[0])
+    target = funcs.get(handed[0])
+    if name in PRINTERS or (target is not None and target.echo_only):
+        return f"{w[0]} {handed[0]}"
+    inner = echo_handoff(handed, funcs)
+    return f"{w[0]} {inner}" if inner else None
 
 
 def discover(root: Path) -> list[str]:
@@ -763,6 +820,7 @@ def sourced_files(
 class Result:
     invocations: list[tuple[int, str]]
     real_exits: list[int]
+    echo_handoffs: list[tuple[int, str]] = field(default_factory=list)
 
 
 def analyse(root: Path, scripts: list[str]) -> dict[str, Result]:
@@ -785,12 +843,16 @@ def analyse(root: Path, scripts: list[str]) -> dict[str, Result]:
         resolve_functions(funcs)
         invocations = []
         exits = []
+        handoffs = []
         for cmd in commands:
             if not is_real_mode(cmd):
                 continue
             found = invocation(cmd.words, funcs)
             if found:
                 invocations.append((cmd.line, found))
+            handoff = echo_handoff(cmd.words, funcs)
+            if handoff:
+                handoffs.append((cmd.line, handoff))
             if (
                 cmd.mode == "real"
                 and cmd.words[:1] == ["exit"]
@@ -799,7 +861,7 @@ def analyse(root: Path, scripts: list[str]) -> dict[str, Result]:
                 and int(cmd.words[1]) != 0
             ):
                 exits.append(cmd.line)
-        results[rel] = Result(invocations, exits)
+        results[rel] = Result(invocations, exits, handoffs)
     return results
 
 
@@ -843,8 +905,13 @@ def check(root: Path, classification: Path, explain: bool = False) -> list[str]:
                 f" +{len(res.invocations) - 4} more" if len(res.invocations) > 4 else ""
             )
             exits = ", ".join(str(n) for n in res.real_exits) or "none"
+            handoffs = (
+                ", ".join(f"{name} (line {line})" for line, name in res.echo_handoffs)
+                or "none"
+            )
             print(
-                f"{rel} [{klass}]: real invocations: {calls or 'none'}{more}; real-only non-zero exits at: {exits}"
+                f"{rel} [{klass}]: real invocations: {calls or 'none'}{more}; "
+                f"real-only non-zero exits at: {exits}; echo handed to a runner: {handoffs}"
             )
         if klass == "external" and not res.invocations:
             errors.append(
@@ -852,6 +919,12 @@ def check(root: Path, classification: Path, explain: bool = False) -> list[str]:
                 "aws/curl/gitleaks/atx/git clone/install.sh/pwsh or a wrapper of them "
                 "(echo/printf/note arguments and dry-run branches do not count): a stub"
             )
+        if klass != "pure":
+            for line, handoff in res.echo_handoffs:
+                errors.append(
+                    f"{rel}: line {line}: the real-mode runner call `{handoff} ...` executes a "
+                    "command that only prints: a stub step, whatever other steps invoke"
+                )
         if klass == "fail-closed" and not res.real_exits:
             errors.append(
                 f"{rel}: classified fail-closed, but no literal `exit <non-zero>` sits in a "

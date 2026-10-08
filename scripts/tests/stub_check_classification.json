@@ -3,7 +3,7 @@
   "scripts": {
     "scripts/aimf/lock-fsxadmin.sh": {
       "class": "external",
-      "reason": "attaches and detaches the IAM deny policy on the Linux instance role with aws iam"
+      "reason": "puts and deletes the Secrets Manager resource policy denying the Linux role read access to appmod/fsxadmin with aws secretsmanager"
     },
     "scripts/aimf/run-atx.sh": {
       "class": "fail-closed",
@@ -63,7 +63,7 @@
     },
     "scripts/run-probe.sh": {
       "class": "external",
-      "reason": "starts the probes with aws ssm send-command and collects results with aws s3 cp"
+      "reason": "starts the probes with aws ssm send-command and collects results with aws ssm get-command-invocation"
     },
     "scripts/teardown.sh": {
       "class": "external",

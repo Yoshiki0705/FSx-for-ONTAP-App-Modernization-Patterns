@@ -144,7 +144,8 @@ test: ## 検出器の unittest、スクリプトの単体テスト、ガード�
 	bash scripts/tests/dryrun_shell_tests.sh
 	# Failure-path mock tests: a failed aws / curl / git / gitleaks call never reads as success
 	bash scripts/tests/failure_path_tests.sh
-	# Stub detector: every external script's real-mode path makes a real aws / curl / ... call
+	# Stub detector: each external script's real-mode path makes at least one real aws / curl / ...
+	# call, and no real-mode runner call (run / step) is handed echo, printf or an echo-only function
 	$(PYTHON) scripts/tests/check_no_stub_scripts.py
 	# Every test file on disk must be reached by this target
 	$(PYTHON) scripts/tests/check_test_coverage.py
