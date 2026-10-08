@@ -39,7 +39,7 @@
 - 2 回目の実行は全オブジェクトが「既存のため変更なし」で終了コード 0 だった。
 - 変更の前と後でセキュリティスタイルは `ntfs`。ボリュームの複製・作り直し・移動はしていない
   （NFS を足すのに複製が要らないことは Hub の
-  [adding-a-protocol-does-not-need-a-clone](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/adding-a-protocol-does-not-need-a-clone.md)
+  [adding-a-protocol-does-not-need-a-clone](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/adding-a-protocol-does-not-need-a-clone.md)
   にある）。
 - name mapping の置換文字列 `APPMOD\\appsvc`（REST の JSON では `\\\\`）は、ONTAP の対応付けの
   結果として 1 文字の `\` を持つ Windows 名 `APPMOD\appsvc` になった。UNIX 名から Windows 名、
@@ -107,7 +107,7 @@
 NFS 側の表示（`ls -l`）は、読み書きできた `appsvc` に対してもモードを `d---------`、所有者を
 `root` または `nobody` と示し、拒否の原因の手がかりにならなかった。原因は ONTAP の effective-permissions、name mapping の解決結果、
 EMS のイベントで切り分けた（NFS 側の表示だけでは NTFS の拒否理由が分からないことは Hub の
-[nfs-side-view-does-not-explain-ntfs-denials](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/nfs-side-view-does-not-explain-ntfs-denials.md)
+[nfs-side-view-does-not-explain-ntfs-denials](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/nfs-side-view-does-not-explain-ntfs-denials.md)
 にある）。
 
 | NFS の主体 | 結果 | Windows 側の対応付け | 原因 |
@@ -123,7 +123,7 @@ EMS のイベントで切り分けた（NFS 側の表示だけでは NTFS の拒
   いない。SMB と NFS でこの差が出る理由は下の「未検証の仮説」に置く。
 - NTFS スタイルのボリュームでは、権限評価に使われるのは Windows の ACL で、NFS の主体もいったん
   Windows 名に対応付けてから評価される（Hub の
-  [security-style-and-permission-evaluation](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/security-style-and-permission-evaluation.md)）。
+  [security-style-and-permission-evaluation](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/security-style-and-permission-evaluation.md)）。
   root が対応付けの段階で、`appreader` が ACL の段階で拒否されたのは、この順序どおりだった。
 
 ## 実測で判明した所見
@@ -142,9 +142,9 @@ EMS のイベントで切り分けた（NFS 側の表示だけでは NTFS の拒
 
 マルチプロトコルの一般知見は、主張ごとに Hub のノートを出典として引く（内容は写さない）。
 
-- NFS を足すのに複製が要らないこと: [adding-a-protocol-does-not-need-a-clone](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/adding-a-protocol-does-not-need-a-clone.md)
-- セキュリティスタイルと権限評価: [security-style-and-permission-evaluation](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/security-style-and-permission-evaluation.md)
-- NFS 側の表示だけでは NTFS の拒否理由が分からないこと: [nfs-side-view-does-not-explain-ntfs-denials](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/nfs-side-view-does-not-explain-ntfs-denials.md)
+- NFS を足すのに複製が要らないこと: [adding-a-protocol-does-not-need-a-clone](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/adding-a-protocol-does-not-need-a-clone.md)
+- セキュリティスタイルと権限評価: [security-style-and-permission-evaluation](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/security-style-and-permission-evaluation.md)
+- NFS 側の表示だけでは NTFS の拒否理由が分からないこと: [nfs-side-view-does-not-explain-ntfs-denials](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/multiprotocol-identity/notes/nfs-side-view-does-not-explain-ntfs-denials.md)
 
 ## 予想（未検証）
 

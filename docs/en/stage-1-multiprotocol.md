@@ -40,7 +40,7 @@ security style stays NTFS.
 - The second run reported every object as already present and unchanged, with exit code 0.
 - The security style was `ntfs` before and after. The volume was not cloned, rebuilt or moved
   (that adding NFS needs no clone is in the Hub note
-  [adding-a-protocol-does-not-need-a-clone](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/adding-a-protocol-does-not-need-a-clone.md)).
+  [adding-a-protocol-does-not-need-a-clone](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/adding-a-protocol-does-not-need-a-clone.md)).
 - The name-mapping replacement `APPMOD\\appsvc` (`\\\\` in the REST JSON) resolved, in ONTAP's
   mapping result, to the Windows name `APPMOD\appsvc` with a single `\`. Both directions, UNIX to
   Windows and Windows to UNIX, resolved as intended for `appsvc` and `appreader`.
@@ -112,7 +112,7 @@ The NFS-side view (`ls -l`) showed mode `d---------` and owner `root` or `nobody
 which could read and write, so it gave no clue to the cause of a denial. Causes were attributed with
 ONTAP effective-permissions, the name-mapping result and EMS events (that the NFS-side view does not
 explain NTFS denials is in the Hub note
-[nfs-side-view-does-not-explain-ntfs-denials](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/nfs-side-view-does-not-explain-ntfs-denials.md)).
+[nfs-side-view-does-not-explain-ntfs-denials](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/nfs-side-view-does-not-explain-ntfs-denials.md)).
 
 | NFS principal | Result | Windows-side mapping | Cause |
 |---|---|---|---|
@@ -127,7 +127,7 @@ explain NTFS denials is in the Hub note
   not changed. Why SMB and NFS differ here is under "Untested hypotheses" below.
 - On an NTFS-style volume the Windows ACL is what is evaluated, and an NFS principal is first mapped
   to a Windows name and then evaluated (Hub note
-  [security-style-and-permission-evaluation](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/security-style-and-permission-evaluation.md)).
+  [security-style-and-permission-evaluation](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/security-style-and-permission-evaluation.md)).
   root was denied at the mapping step and `appreader` at the ACL step, in that order.
 
 ## Findings from the measurement
@@ -146,9 +146,9 @@ explain NTFS denials is in the Hub note
 
 General multiprotocol findings are cited per claim from Hub notes (contents are not copied).
 
-- Adding NFS needs no clone: [adding-a-protocol-does-not-need-a-clone](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/adding-a-protocol-does-not-need-a-clone.md)
-- Security style and permission evaluation: [security-style-and-permission-evaluation](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/security-style-and-permission-evaluation.md)
-- The NFS-side view does not explain NTFS denials: [nfs-side-view-does-not-explain-ntfs-denials](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/nfs-side-view-does-not-explain-ntfs-denials.md)
+- Adding NFS needs no clone: [adding-a-protocol-does-not-need-a-clone](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/adding-a-protocol-does-not-need-a-clone.md)
+- Security style and permission evaluation: [security-style-and-permission-evaluation](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/security-style-and-permission-evaluation.md)
+- The NFS-side view does not explain NTFS denials: [nfs-side-view-does-not-explain-ntfs-denials](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/en/domains/multiprotocol-identity/notes/nfs-side-view-does-not-explain-ntfs-denials.md)
 
 ## Predictions (unverified)
 

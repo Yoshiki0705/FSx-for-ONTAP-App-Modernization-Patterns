@@ -24,8 +24,8 @@ Lambda. The volume is not cloned and the data is not moved.
 
 S3 Access Point constraints are cited per claim from Hub notes (contents are not copied).
 
-- S3 Access Point constraints (unsupported APIs, single-identity authorization, ACLs not inherited, no event notification): [s3-access-point-constraints](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/ja/domains/data-utilization/notes/s3-access-point-constraints.md)
-- The two-layer authorization: [access-point-authorization-layers](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/ja/domains/security-governance/notes/access-point-authorization-layers.md)
+- S3 Access Point constraints (unsupported APIs, single-identity authorization, ACLs not inherited, no event notification): [s3-access-point-constraints](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/data-utilization/notes/s3-access-point-constraints.md)
+- The two-layer authorization: [access-point-authorization-layers](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/security-governance/notes/access-point-authorization-layers.md)
 
 ## Predictions (unverified)
 
