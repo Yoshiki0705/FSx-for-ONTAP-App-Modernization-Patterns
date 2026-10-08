@@ -122,7 +122,8 @@ links: ## 内部リンクの解決
 # fails when a test file on disk is not reached by this target.
 TEST_DIRS := scripts/tests
 PY_UNITTEST := tools.test_ai_style scripts.tests.test_estimate scripts.tests.test_readonly_scripts \
-               scripts.tests.test_reuse_permutations
+               scripts.tests.test_reuse_permutations scripts.tests.test_probe_merge \
+               scripts.tests.test_no_stub_scripts
 
 .PHONY: test
 test: ## 検出器の unittest、スクリプトの単体テスト、ガード・フック・シェルの自己テスト
@@ -141,6 +142,11 @@ test: ## 検出器の unittest、スクリプトの単体テスト、ガード�
 	$(PYTHON) scripts/make-seed.py --selftest
 	# Shell dry-run tests (deploy / run-atx / block_direct_atx / check-no-locking / integration-clone)
 	bash scripts/tests/dryrun_shell_tests.sh
+	# Failure-path mock tests: a failed aws / curl / git / gitleaks call never reads as success
+	bash scripts/tests/failure_path_tests.sh
+	# Stub detector: each external script's real-mode path makes at least one real aws / curl / ...
+	# call, and no real-mode runner call (run / step) is handed echo, printf or an echo-only function
+	$(PYTHON) scripts/tests/check_no_stub_scripts.py
 	# Every test file on disk must be reached by this target
 	$(PYTHON) scripts/tests/check_test_coverage.py
 

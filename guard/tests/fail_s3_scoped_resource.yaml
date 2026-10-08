@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# Fixture: fails cfn-guard rule s3_scoped_resource only. A Lambda execution role grants S3 object
+# access on Resource '*', the shape the stage-3 role had before it was scoped to the access point.
+Description: Fixture that must fail the s3_scoped_resource rule.
+Rules:
+  RegionPinned:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', ap-northeast-1]
+        AssertDescription: Region pin.
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: worker-s3-access-point
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource: '*'

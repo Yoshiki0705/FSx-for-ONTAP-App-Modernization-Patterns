@@ -1,0 +1,19 @@
+{
+ "schema": "appmod-probe/1",
+ "run_id": "s1-fixture",
+ "stage": 1,
+ "role": "standalone",
+ "host": {
+  "os": "windows"
+ },
+ "behaviors": [
+  {
+   "id": "file-locking",
+   "outcome": "measured",
+   "observed": {
+    "topology": "cross-host",
+    "exclusive_open": true
+   }
+  }
+ ]
+}

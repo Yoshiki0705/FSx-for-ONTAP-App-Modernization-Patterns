@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace DocIntake.Probe
 {
@@ -13,9 +14,19 @@ namespace DocIntake.Probe
         public int Stage;          // 0..3
         public string Role;        // writer | reader | holder | contender
         public string RunId;       // s<stage>-<UTC>
+        public string PairBehavior; // file-locking | write-visibility, or null for the 5-behavior run
+        public string SyncId;      // shared with the other host for one coordinated pair
+        public string SyncDir;     // local signal directory the launcher bridges to S3
+        public double? NtpOffsetMs; // measured by the launcher (w32tm), recorded in host
 
         private static readonly HashSet<string> KnownStores =
             new HashSet<string>(new[] { "smb", "nfs", "s3" });
+
+        private static readonly Dictionary<string, string[]> PairRoles = new Dictionary<string, string[]>
+        {
+            { "file-locking", new[] { "holder", "contender" } },
+            { "write-visibility", new[] { "writer", "reader" } }
+        };
 
         public static ProbeConfig Parse(string[] args)
         {
@@ -47,7 +58,7 @@ namespace DocIntake.Probe
                 throw new ArgumentException("stage must be 0..3");
             }
 
-            return new ProbeConfig
+            var config = new ProbeConfig
             {
                 StoreKind = map["store"],
                 Root = map["root"],
@@ -55,6 +66,40 @@ namespace DocIntake.Probe
                 Role = map["role"],
                 RunId = map["run-id"]
             };
+            string value;
+            if (map.TryGetValue("ntp-offset-ms", out value))
+            {
+                double offset;
+                if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out offset))
+                {
+                    throw new ArgumentException("--ntp-offset-ms must be a number");
+                }
+                config.NtpOffsetMs = offset;
+            }
+            // Coordinated two-client mode (file-locking / write-visibility against another host).
+            if (map.TryGetValue("pair-behavior", out value))
+            {
+                string[] roles;
+                if (!PairRoles.TryGetValue(value, out roles))
+                {
+                    throw new ArgumentException("unknown pair behavior: " + value);
+                }
+                if (Array.IndexOf(roles, config.Role) < 0)
+                {
+                    throw new ArgumentException("role for " + value + " must be " + string.Join(" or ", roles));
+                }
+                foreach (var required in new[] { "sync-id", "sync-dir" })
+                {
+                    if (!map.ContainsKey(required))
+                    {
+                        throw new ArgumentException("--" + required + " is required with --pair-behavior");
+                    }
+                }
+                config.PairBehavior = value;
+                config.SyncId = map["sync-id"];
+                config.SyncDir = map["sync-dir"];
+            }
+            return config;
         }
     }
 }

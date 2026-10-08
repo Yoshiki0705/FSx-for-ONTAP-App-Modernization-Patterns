@@ -1,0 +1,11 @@
+{
+  "records": [
+    {"name": "appmodsvm_root", "uuid": "u-root", "snapshot_locking_enabled": false, "snaplock": {"type": "non_snaplock"}},
+    {"name": "appdata", "uuid": "u-appdata", "snapshot_locking_enabled": false, "snaplock": {"type": "non_snaplock"}}
+  ],
+  "num_records": 2,
+  "_links": {
+    "self": {"href": "/api/storage/volumes?fields=name,uuid,snapshot_locking_enabled,snaplock.type"},
+    "next": {"href": "/api/storage/volumes?start.uuid=u-appdata&fields=name,uuid,snapshot_locking_enabled,snaplock.type"}
+  }
+}

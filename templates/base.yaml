@@ -915,9 +915,13 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
         - arn:aws:iam::aws:policy/AmazonSSMDirectoryServiceAccess
       Policies:
-        # The Windows host reads only the AD admin secret, to create the test users with the
-        # Active Directory administration tools (no AWS API exists for that). It never holds the
-        # fsxadmin cluster credential.
+        # The Windows host reads the AD admin secret and the app-users secret, to create the test
+        # users (appsvc, appreader) with the Active Directory administration tools (no AWS API
+        # exists for that): the AD admin secret is the directory credential, the app-users secret
+        # holds the passwords the two accounts are created with (scripts/create-ad-users.ps1). It
+        # never holds the fsxadmin cluster credential. The app-users grant is scoped to that one
+        # secret only. (The running appmod-base stack was patched out-of-band with the same grant
+        # via put-role-policy before this template carried it; see design.md.)
         - PolicyName: read-ad-admin-secret
           PolicyDocument:
             Version: '2012-10-17'
@@ -929,6 +933,23 @@ Resources:
                     - AdSecretGivenAsArn
                     - !Ref AdAdminSecretName
                     - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AdAdminSecretName}-??????'
+                  - !Sub 'arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NamePrefix}/app-users-??????'
+        # The Windows host reads the source and writes build output / inventory through the
+        # artifacts bucket (DocIntake build in stage 0, probe inventory). Scoped to that bucket
+        # only. (The running appmod-base stack was patched out-of-band with the same grant via
+        # put-role-policy before this template carried it; see design.md.)
+        - PolicyName: artifacts-bucket-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ArtifactsBucket.Arn
+                  - !Sub '${ArtifactsBucket.Arn}/*'
 
   WindowsInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -1277,6 +1298,12 @@ Outputs:
     Value: !Ref LinuxClient
     Export:
       Name: !Sub '${AWS::StackName}-LinuxClientInstanceId'
+
+  LinuxRoleArn:
+    Description: >-
+      The Linux EC2 instance role ARN. Pass it as APPMOD_LINUX_ROLE_ARN to
+      scripts/aimf/lock-fsxadmin.sh on (task 4.1).
+    Value: !GetAtt LinuxRole.Arn
 
   BeforeYouStart:
     Description: >-

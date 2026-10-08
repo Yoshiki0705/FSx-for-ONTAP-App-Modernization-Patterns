@@ -81,7 +81,39 @@ phase_network_new_vpc() {
   # nothing to check (the template's example default is the caller's to deconflict).
   if [ -n "$CIDR" ]; then
     echo "  Checking that the supplied CIDR $CIDR does not overlap an existing VPC CIDR"
-    aws_ro ec2 describe-vpcs --query 'Vpcs[].CidrBlock' >/dev/null || missing=1
+    local cidr_query='Vpcs[].CidrBlockAssociationSet[].CidrBlock'
+    if [ -n "$DRY_RUN" ]; then
+      aws_ro ec2 describe-vpcs --query "$cidr_query" --output text >/dev/null
+    else
+      # Every associated IPv4 CIDR of every VPC is compared, not only the primary one. A failed
+      # listing, an unparseable CIDR, or an overlap all fail the phase: none of them may read as
+      # "no conflict".
+      local existing
+      if ! existing="$(aws_ro ec2 describe-vpcs --query "$cidr_query" --output text)"; then
+        echo "  could not list the existing VPC CIDRs" >&2
+        missing=1
+      elif ! printf '%s\n' "$existing" | python3 -c 'import ipaddress, sys
+try:
+    new = ipaddress.ip_network(sys.argv[1], strict=False)
+except ValueError as exc:
+    sys.exit(f"  --cidr is not a CIDR: {exc}")
+overlaps = []
+for token in sys.stdin.read().split():
+    if token == "None":
+        continue
+    try:
+        old = ipaddress.ip_network(token, strict=False)
+    except ValueError:
+        sys.exit(f"  describe-vpcs returned a value that is not a CIDR: {token}")
+    if old.version == new.version and old.overlaps(new):
+        overlaps.append(str(old))
+if overlaps:
+    listed = ", ".join(overlaps)
+    sys.exit(f"  {new} overlaps existing VPC CIDR(s): {listed}")
+print(f"  no existing VPC CIDR overlaps {new}")' "$CIDR"; then
+        missing=1
+      fi
+    fi
   else
     echo "  note: pass --cidr <cidr> to check the new VPC CIDR against existing VPCs" >&2
   fi

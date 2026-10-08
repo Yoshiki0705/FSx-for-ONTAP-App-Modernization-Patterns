@@ -6,12 +6,17 @@
 #
 #   inventory.sh --mount /mnt/appdata --out /tmp/linux-inventory.json
 #
+# Over NFS (sec=sys) the principal is the local uid. Run it as the UNIX user appsvc, e.g.
+# `setpriv --reuid=10001 --regid=10001 --clear-groups inventory.sh --mount /mnt/appdata`: root is
+# squashed to the anonymous user by the export (superuser none), which has no Windows mapping, so
+# the NTFS ACL denies it.
+#
 set -euo pipefail
 
 MOUNT=""
-OUT="/dev/stdout"
+OUT="-"
 
-usage() { echo "usage: inventory.sh --mount <dir> [--out <file>]" >&2; }
+usage() { echo "usage: inventory.sh --mount <dir> [--out <file>|-]" >&2; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -33,20 +38,37 @@ sha_cmd() {
 }
 
 seed_root="$MOUNT/seed"
-{
+# List first and check the status: a process substitution's exit status is never checked, so a
+# find that failed part-way (an unreadable directory, an NFS error) would yield a short inventory
+# that reads as complete. Deterministic order so two inventories compare cleanly.
+if ! FILES="$(find "$seed_root" -type f | LC_ALL=C sort)"; then
+  echo "inventory: listing $seed_root failed; no inventory written" >&2
+  exit 1
+fi
+emit() {
   echo '{'
   echo '  "store": {"kind": "nfs", "root": "'"$MOUNT"'"},'
   echo '  "files": ['
   first=1
-  # Deterministic order so two inventories compare cleanly.
   while IFS= read -r file; do
+    [ -n "$file" ] || continue
     rel="seed/${file#"$seed_root"/}"
     size="$(wc -c <"$file" | tr -d ' ')"
     sha="$(sha_cmd "$file")"
     if [ "$first" -eq 1 ]; then first=0; else echo '    ,'; fi
     printf '    {"path": "%s", "size": %s, "sha256": "%s"}\n' "$rel" "$size" "$sha"
-  done < <(find "$seed_root" -type f | LC_ALL=C sort)
+  done <<EOF
+$FILES
+EOF
   echo '  ]'
   echo '}'
-} >"$OUT"
+}
+# Writing to stdout without reopening /dev/stdout: reopening it fails with EACCES when this runs as
+# an unprivileged NFS principal (setpriv --reuid=10001) and stdout is a file root opened (live
+# 2026-10-07).
+if [ "$OUT" = "-" ]; then
+  emit
+else
+  emit >"$OUT"
+fi
 echo "inventory: wrote seed inventory to $OUT" >&2

@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import ipaddress
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -51,6 +53,20 @@ FIXED_THROUGHPUT_MBPS = 128
 # multiplies unit price by the requested hours.
 HOURS_IN_MONTH = 730.0
 
+# The approved deployment configuration is recorded in the estimate as CloudFormation
+# ParameterKey/ParameterValue pairs, so the estimate a human approves and the parameters deploy.sh
+# passes to create-stack are the same artifact. The five switchable kinds default to create-new;
+# an Existing* ID is required and recorded only when its matching Create<X> is false. The ID
+# formats below mirror the AllowedPattern on each parameter in templates/base.yaml (a reused ID is
+# validated here before it can reach create-stack).
+BOOL_VALUES = ("true", "false")
+EXISTING_ID_PATTERNS = {
+    "ExistingVpcId": re.compile(r"^vpc-[0-9a-f]{8,}$"),
+    "ExistingPrimarySubnetId": re.compile(r"^subnet-[0-9a-f]{8,}$"),
+    "ExistingSecondAzSubnetId": re.compile(r"^subnet-[0-9a-f]{8,}$"),
+    "ExistingDirectoryId": re.compile(r"^d-[0-9a-f]{10}$"),
+}
+
 
 class InputError(ValueError):
     """Raised for an invalid command-line input (exit code 2)."""
@@ -68,6 +84,160 @@ def _parse_iso(value: str) -> dt.datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=dt.timezone.utc)
     return parsed
+
+
+def _parse_cidr(label: str, value: str) -> ipaddress.IPv4Network:
+    """Parse an IPv4 CIDR with the network bits set (strict). Raises InputError (exit 2)."""
+    try:
+        return ipaddress.ip_network(value, strict=True)
+    except ValueError as exc:
+        raise InputError(
+            f"{label} is not a well-formed IPv4 CIDR: {value!r} ({exc})"
+        ) from exc
+
+
+def _require_bool(label: str, value: str) -> str:
+    text = value.strip().lower()
+    if text not in BOOL_VALUES:
+        raise InputError(
+            f"{label} must be one of {', '.join(BOOL_VALUES)} (got {value!r})"
+        )
+    return text
+
+
+def build_base_parameters(args: argparse.Namespace) -> list[dict[str, str]]:
+    """Return the CloudFormation parameters for a base deploy as ordered ParameterKey/Value pairs.
+
+    The five switchable kinds are always recorded (Create<X>=true|false). When a kind is created
+    new, the three CIDRs are validated (well-formed, and both subnet CIDRs inside the VPC CIDR) and
+    recorded. When a kind is reused, its Existing* ID(s) must be present and well-formed and are
+    recorded instead. Parameters with safe template defaults (NamePrefix, EgressMode, ...) are
+    recorded only when overridden on the command line. Raises InputError (exit 2) on any violation.
+    """
+    create_vpc = _require_bool("--create-vpc", args.create_vpc)
+    create_subnets = _require_bool("--create-subnets", args.create_subnets)
+    create_interface_endpoints = _require_bool(
+        "--create-interface-endpoints", args.create_interface_endpoints
+    )
+    create_s3_gateway_endpoint = _require_bool(
+        "--create-s3-gateway-endpoint", args.create_s3_gateway_endpoint
+    )
+    create_directory = _require_bool("--create-directory", args.create_directory)
+
+    # A dedicated new VPC always creates its own subnets (base.yaml: CreateVpc true requires
+    # CreateSubnets true). Reject the unsupported combination here rather than at create-stack.
+    if create_vpc == "true" and create_subnets == "false":
+        raise InputError(
+            "--create-vpc true requires --create-subnets true "
+            "(a newly created VPC always creates its own subnets)"
+        )
+
+    params: list[dict[str, str]] = []
+
+    def add(key: str, value: str) -> None:
+        params.append({"ParameterKey": key, "ParameterValue": value})
+
+    def require_existing(flag_label: str, key: str, value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            raise InputError(f"{flag_label} is false; {key} is required")
+        pattern = EXISTING_ID_PATTERNS[key]
+        if not pattern.fullmatch(text):
+            raise InputError(f"{key} is not well-formed: {text!r}")
+        return text
+
+    # VPC and subnets: validate CIDRs on create, existing IDs on reuse.
+    add("CreateVpc", create_vpc)
+    add("CreateSubnets", create_subnets)
+    if create_vpc == "true":
+        vpc_net = _parse_cidr("--vpc-cidr", args.vpc_cidr)
+        add("VpcCidr", str(vpc_net))
+    else:
+        add(
+            "ExistingVpcId",
+            require_existing("--create-vpc", "ExistingVpcId", args.existing_vpc_id),
+        )
+        vpc_net = None
+
+    if create_subnets == "true":
+        primary_net = _parse_cidr("--primary-subnet-cidr", args.primary_subnet_cidr)
+        second_net = _parse_cidr("--second-az-subnet-cidr", args.second_az_subnet_cidr)
+        if vpc_net is not None:
+            # Basic containment: each created subnet CIDR must sit inside the created VPC CIDR.
+            if not primary_net.subnet_of(vpc_net):
+                raise InputError(
+                    f"--primary-subnet-cidr {primary_net} is not inside --vpc-cidr {vpc_net}"
+                )
+            if not second_net.subnet_of(vpc_net):
+                raise InputError(
+                    f"--second-az-subnet-cidr {second_net} is not inside --vpc-cidr {vpc_net}"
+                )
+        add("PrimarySubnetCidr", str(primary_net))
+        add("SecondAzSubnetCidr", str(second_net))
+    else:
+        add(
+            "ExistingPrimarySubnetId",
+            require_existing(
+                "--create-subnets",
+                "ExistingPrimarySubnetId",
+                args.existing_primary_subnet_id,
+            ),
+        )
+        add(
+            "ExistingSecondAzSubnetId",
+            require_existing(
+                "--create-subnets",
+                "ExistingSecondAzSubnetId",
+                args.existing_second_az_subnet_id,
+            ),
+        )
+
+    # Endpoints.
+    add("CreateInterfaceEndpoints", create_interface_endpoints)
+    add("CreateS3GatewayEndpoint", create_s3_gateway_endpoint)
+    # RouteTableIds is required when the S3 gateway endpoint is created against a reused VPC.
+    if create_s3_gateway_endpoint == "true" and create_vpc == "false":
+        route_tables = (args.route_table_ids or "").strip()
+        if not route_tables:
+            raise InputError(
+                "--create-s3-gateway-endpoint true with --create-vpc false requires "
+                "--route-table-ids"
+            )
+        add("RouteTableIds", route_tables)
+
+    # Directory.
+    add("CreateDirectory", create_directory)
+    if create_directory == "false":
+        add(
+            "ExistingDirectoryId",
+            require_existing(
+                "--create-directory", "ExistingDirectoryId", args.existing_directory_id
+            ),
+        )
+        dns_ips = (args.existing_directory_dns_ips or "").strip()
+        if not dns_ips:
+            raise InputError(
+                "--create-directory is false; --existing-directory-dns-ips is required"
+            )
+        for ip in [p.strip() for p in dns_ips.split(",") if p.strip()]:
+            try:
+                ipaddress.IPv4Address(ip)
+            except ValueError as exc:
+                raise InputError(
+                    f"--existing-directory-dns-ips has a bad address {ip!r}: {exc}"
+                ) from exc
+        add("ExistingDirectoryDnsIps", dns_ips)
+
+    # EgressMode is a base.yaml parameter with a safe default; record it when it was supplied.
+    if args.egress_mode is not None:
+        add("EgressMode", args.egress_mode)
+
+    # Other base.yaml parameters that have safe defaults are recorded only when overridden.
+    for key, value in (("NamePrefix", args.name_prefix),):
+        if value is not None:
+            add(key, value)
+
+    return params
 
 
 def validate_target_args(args: argparse.Namespace) -> None:
@@ -170,6 +340,7 @@ def write_estimate(
     egress_mode: str | None,
     items: list[dict[str, object]],
     minimum_mismatch: dict[str, int] | None,
+    parameters: list[dict[str, str]] | None,
 ) -> Path:
     ESTIMATES_DIR.mkdir(parents=True, exist_ok=True)
     created = _utc_now()
@@ -185,6 +356,11 @@ def write_estimate(
         "line_items": items,
         "minimum_recheck": minimum_mismatch,
     }
+    # The CloudFormation parameters the approved estimate authorizes. deploy.sh reads this object
+    # and passes exactly these to create-stack; an estimate without it is refused rather than
+    # deployed with template defaults.
+    if parameters is not None:
+        payload["parameters"] = parameters
     subtotals = [i["subtotal_usd"] for i in items if i["subtotal_usd"] is not None]
     payload["total_usd"] = round(sum(subtotals), 2) if subtotals else None
     json_path = ESTIMATES_DIR / f"{stamp}-{target}.json"
@@ -254,6 +430,9 @@ def cmd_elapsed(args: argparse.Namespace) -> int:
 def cmd_target(args: argparse.Namespace) -> int:
     try:
         validate_target_args(args)
+        # For base, resolve the deployment configuration into CloudFormation parameters before any
+        # price is fetched, so an invalid configuration fails (exit 2) without a billed lookup.
+        parameters = build_base_parameters(args) if args.target == "base" else None
     except InputError as exc:
         print(f"estimate: {exc}", file=sys.stderr)
         return 2
@@ -294,7 +473,9 @@ def cmd_target(args: argparse.Namespace) -> int:
             exit_code = 4
 
     items = build_line_items(prices, args.target, hours, args.egress_mode)
-    path = write_estimate(args.target, hours, args.egress_mode, items, minimum_mismatch)
+    path = write_estimate(
+        args.target, hours, args.egress_mode, items, minimum_mismatch, parameters
+    )
     try:
         shown = path.relative_to(ROOT)
     except ValueError:
@@ -318,6 +499,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--egress-mode")
     parser.add_argument("--region")
     parser.add_argument("--elapsed", action="store_true")
+
+    # --target base deployment configuration. The five Create<X> switches default to the all-new
+    # dedicated environment; CIDRs default to the approved dedicated-VPC values. Existing* IDs are
+    # read only when the matching Create<X> is false. Validated by build_base_parameters and
+    # recorded in the estimate as the CloudFormation parameters deploy.sh will pass.
+    base = parser.add_argument_group("base deployment configuration (--target base)")
+    base.add_argument("--create-vpc", default="true")
+    base.add_argument("--create-subnets", default="true")
+    base.add_argument("--create-interface-endpoints", default="true")
+    base.add_argument("--create-s3-gateway-endpoint", default="true")
+    base.add_argument("--create-directory", default="true")
+    # Approved dedicated-VPC CIDRs for this run (10.90.0.0/16 confirmed non-overlapping).
+    base.add_argument("--vpc-cidr", default="10.90.0.0/16")
+    base.add_argument("--primary-subnet-cidr", default="10.90.0.0/24")
+    base.add_argument("--second-az-subnet-cidr", default="10.90.1.0/24")
+    base.add_argument("--existing-vpc-id")
+    base.add_argument("--existing-primary-subnet-id")
+    base.add_argument("--existing-second-az-subnet-id")
+    base.add_argument("--existing-directory-id")
+    base.add_argument("--existing-directory-dns-ips")
+    base.add_argument("--route-table-ids")
+    base.add_argument("--name-prefix")
+
     parser.add_argument(
         "--price-fixture", help="JSON of unit prices (tests only; no live call)"
     )

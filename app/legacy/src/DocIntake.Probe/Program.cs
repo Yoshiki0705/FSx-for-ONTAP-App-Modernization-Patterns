@@ -32,6 +32,11 @@ namespace DocIntake.Probe
             }
 
             var store = new SmbFileStore(config.Root);
+            if (config.PairBehavior != null)
+            {
+                Console.WriteLine(PairProbe.Run(config, store));
+                return 0;
+            }
             var behaviors = new List<string>();
             behaviors.Add(Measure("case-sensitivity", config, () => CaseSensitivity(store)));
             behaviors.Add(Measure("path-separator", config, () => PathSeparator(store)));

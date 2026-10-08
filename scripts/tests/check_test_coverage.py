@@ -9,6 +9,7 @@ Makefile, either by path (shell tests, guard negatives) or by its unittest dotte
 Covered test shapes:
   scripts/tests/test_*.py        -> unittest module scripts.tests.test_*
   scripts/tests/*_tests.sh       -> referenced by path
+  scripts/tests/check_*.py       -> referenced by path (repository-wide checkers, this one included)
   guard/tests/run_*.py           -> referenced by path
 
 Run from the repository root:  python3 scripts/tests/check_test_coverage.py
@@ -48,6 +49,8 @@ def discover() -> list[tuple[Path, str]]:
         module = "scripts.tests." + path.stem
         found.append((path, module))
     for path in sorted((ROOT / "scripts" / "tests").glob("*_tests.sh")):
+        found.append((path, str(path.relative_to(ROOT))))
+    for path in sorted((ROOT / "scripts" / "tests").glob("check_*.py")):
         found.append((path, str(path.relative_to(ROOT))))
     for path in sorted((ROOT / "guard" / "tests").glob("run_*.py")):
         found.append((path, str(path.relative_to(ROOT))))

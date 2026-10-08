@@ -13,7 +13,7 @@ From stage 1 (multiprotocol) onward, the path splits between moving to modern .N
 
 ## Link to the neighboring Spoke
 
-- Container-Datastore Spoke: [FSx-for-ONTAP-as-Container-Datastore (link activated after publication)](https://github.com/Yoshiki0705/FSx-for-ONTAP-as-Container-Datastore)
+- Container-Datastore Spoke: [FSx-for-ONTAP-as-Container-Datastore (link activated after publication)](https://github.com/Yoshiki0705/FSx-for-ONTAP-Container-Datastore-Patterns)
 
 ## Predictions (unverified)
 

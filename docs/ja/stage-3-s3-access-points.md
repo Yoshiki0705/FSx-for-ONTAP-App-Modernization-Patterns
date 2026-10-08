@@ -23,8 +23,8 @@
 
 S3 Access Points の制約は、主張ごとに Hub のノートを出典として引く（内容は写さない）。
 
-- S3 Access Points の制約（非対応 API、単一 ID での認可、ACL の非継承、イベント通知の不在）: [s3-access-point-constraints](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/ja/domains/data-utilization/notes/s3-access-point-constraints.md)
-- 認可の二層構造: [access-point-authorization-layers](https://github.com/Yoshiki0705/fsxn-adoption-playbook/blob/main/docs/ja/domains/security-governance/notes/access-point-authorization-layers.md)
+- S3 Access Points の制約（非対応 API、単一 ID での認可、ACL の非継承、イベント通知の不在）: [s3-access-point-constraints](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/data-utilization/notes/s3-access-point-constraints.md)
+- 認可の二層構造: [access-point-authorization-layers](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/security-governance/notes/access-point-authorization-layers.md)
 
 ## 予想（未検証）
 

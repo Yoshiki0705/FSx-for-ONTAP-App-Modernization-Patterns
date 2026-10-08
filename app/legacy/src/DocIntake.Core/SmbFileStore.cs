@@ -71,14 +71,36 @@ namespace DocIntake.Core
 
         // acl-evaluation pitfall: evaluate the NTFS ACL with GetAccessControl before the I/O. This
         // Windows-only API has no equivalent on Linux, so after migration the pre-check and the
-        // real NFS result can disagree.
+        // real NFS result can disagree. The pitfall (the GetAccessControl family) stays here, in
+        // this one method, exactly once (R5.3).
+        //
+        // When the target file does not exist yet, the writability of the location is governed by
+        // the parent directory's ACL, so inspect Directory.GetAccessControl(parent) rather than
+        // File.GetAccessControl(missing-file). Returning false for a missing file would be a false
+        // pre-check: the actual write would then succeed on Windows+SMB, manufacturing a pre-check
+        // vs I/O mismatch that R5.3 forbids on Windows+SMB. Existing files are evaluated with
+        // File.GetAccessControl as before.
         public bool CanWrite(string relativePath)
         {
             try
             {
                 var full = Full(relativePath);
-                var security = File.GetAccessControl(full);
-                var rules = security.GetAccessRules(true, true, typeof(System.Security.Principal.NTAccount));
+                AuthorizationRuleCollection rules;
+                if (File.Exists(full))
+                {
+                    rules = File.GetAccessControl(full)
+                        .GetAccessRules(true, true, typeof(System.Security.Principal.NTAccount));
+                }
+                else
+                {
+                    var parent = Path.GetDirectoryName(full);
+                    if (string.IsNullOrEmpty(parent))
+                    {
+                        return false;
+                    }
+                    rules = Directory.GetAccessControl(parent)
+                        .GetAccessRules(true, true, typeof(System.Security.Principal.NTAccount));
+                }
                 foreach (FileSystemAccessRule rule in rules)
                 {
                     if (rule.AccessControlType == AccessControlType.Deny

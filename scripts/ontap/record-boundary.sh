@@ -1,38 +1,69 @@
 #!/usr/bin/env bash
 #
 # Record a stage boundary (b0..b3) as JSON for check-invariant.py. Captures, over the ONTAP REST
-# API, the ONTAP version, the target volume UUID, security style, export policy, name mappings, the
-# snapshot list, the full volume list, and the snapshot-locking state; and references the inventory
-# files (path + SHA-256) that inventory.ps1 / inventory.sh wrote.
+# API, the real ONTAP version, the target volume UUID, security style, export policy, name mappings,
+# the snapshot list, the full volume list and the snapshot-locking state; and references the
+# inventory files (path + SHA-256) that inventory.ps1 / inventory.sh wrote. The emitted JSON carries
+# captured values, not <...> placeholders.
 #
-#   record-boundary.sh --boundary b0 --out <dir> [--windows-inventory <f>] [--linux-inventory <f>]
+#   record-boundary.sh --boundary b0 --run-id s0-<UTC> \
+#       [--file-system-id fs-...] [--mgmt-ip ip] [--svm appmodsvm] [--volume appdata] \
+#       [--windows-inventory f] [--linux-inventory f] [--region ap-northeast-1]
 #
-# Reads only; fsxadmin or the read-only role is read from Secrets Manager by the instance role. The
-# ONTAP calls are shown rather than executed here (this runs only in-environment); the JSON skeleton
-# it emits is the shape check-invariant.py consumes. When APPMOD_DRY_RUN is set the calls are marked.
+# Reads only. fsxadmin (or the read-only role appmod_readonly) is read from Secrets Manager by the
+# instance role inside this script, never passed in argv and never echoed. Writes to
+# .private/runs/<run-id>/<boundary>.json. The management IP is resolved at runtime from the FSx for ONTAP API
+# when not supplied. Live fs-/i-/account values are never hardcoded here.
+#
+# When APPMOD_DRY_RUN is set, each GET is printed (credential redacted) and no AWS/ONTAP call is
+# made; a dry-run still writes a record, filled from the inventory SHA-256s it can compute locally
+# and placeholders for the ONTAP-side fields, so the shape check-invariant.py consumes is exercised.
+# A real run writes the captured ONTAP values. Verified live 2026-10-07: ONTAP 9.19.1P2; a
+# non-SnapLock volume reports snaplock.type "non_snaplock".
 #
 set -euo pipefail
 
-MGMT_IP="${APPMOD_ONTAP_MGMT_IP:-<management-ip>}"
+REGION="${APPMOD_REGION:-ap-northeast-1}"
+DRY_RUN="${APPMOD_DRY_RUN:-}"
+FS_ID="${APPMOD_FS_ID:-}"
+MGMT_IP="${APPMOD_ONTAP_MGMT_IP:-}"
+SVM="${APPMOD_SVM:-appmodsvm}"
+VOLUME="${APPMOD_VOLUME:-appdata}"
+SECRET_ID="${APPMOD_FSXADMIN_SECRET:-appmod/fsxadmin}"
 BOUNDARY=""
-OUT_DIR="."
+RUN_ID=""
 WIN_INV=""
 LNX_INV=""
 
-usage() { echo "usage: record-boundary.sh --boundary b0|b1|b2|b3 --out <dir> [--windows-inventory f] [--linux-inventory f]" >&2; }
+usage() {
+  echo "usage: record-boundary.sh --boundary b0|b1|b2|b3 --run-id s<n>-<UTC>" >&2
+  echo "         [--file-system-id fs-...] [--mgmt-ip ip] [--svm name] [--volume name]" >&2
+  echo "         [--windows-inventory f] [--linux-inventory f] [--region r]" >&2
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --boundary) BOUNDARY="${2:-}"; shift 2 ;;
-    --out) OUT_DIR="${2:-}"; shift 2 ;;
+    --run-id) RUN_ID="${2:-}"; shift 2 ;;
+    --file-system-id) FS_ID="${2:-}"; shift 2 ;;
+    --mgmt-ip) MGMT_IP="${2:-}"; shift 2 ;;
+    --svm) SVM="${2:-}"; shift 2 ;;
+    --volume) VOLUME="${2:-}"; shift 2 ;;
     --windows-inventory) WIN_INV="${2:-}"; shift 2 ;;
     --linux-inventory) LNX_INV="${2:-}"; shift 2 ;;
+    --region) REGION="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "record-boundary: unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
+# --svm is the ONTAP SVM name, not the SVM ID from the FSx for ONTAP API (svm-...). Same check as teardown.sh.
+if [[ "$SVM" =~ ^svm-[0-9a-f]+$ ]]; then
+  echo "record-boundary: --svm takes the ONTAP SVM name (for example appmodsvm), not the SVM ID from the FSx for ONTAP API ($SVM)" >&2
+  exit 2
+fi
 
 case "$BOUNDARY" in b0|b1|b2|b3) ;; *) echo "record-boundary: --boundary must be b0..b3" >&2; usage; exit 2 ;; esac
+if [ -z "$RUN_ID" ]; then echo "record-boundary: --run-id is required" >&2; usage; exit 2; fi
 
 sha_of() {
   # sha256 of a file, portable between macOS and Linux. Empty when the file is absent.
@@ -42,32 +73,239 @@ sha_of() {
   fi
 }
 
-echo "record-boundary: $BOUNDARY from $MGMT_IP (read-only)"
-echo "  GET /api/cluster?fields=version"
-echo "  GET /api/storage/volumes?fields=name,uuid,nas.security_style,snapshot_locking_enabled,snaplock.type"
-echo "  GET /api/protocols/nfs/export-policies ; GET /api/name-services/name-mappings"
-echo "  GET /api/storage/volumes/{appdata-uuid}/snapshots"
+resolve_mgmt_ip() {
+  if [ -n "$MGMT_IP" ]; then return 0; fi
+  if [ -z "$FS_ID" ]; then
+    echo "record-boundary: need --file-system-id (or APPMOD_FS_ID) to resolve the management IP, or pass --mgmt-ip" >&2
+    exit 2
+  fi
+  if [ -n "$DRY_RUN" ]; then
+    echo "DRY-RUN: aws --region $REGION fsx describe-file-systems --file-system-id $FS_ID \\"
+    echo "           --query 'FileSystems[0].OntapConfiguration.Endpoints.Management.IpAddresses' --output text"
+    MGMT_IP="<management-ip>"
+    return 0
+  fi
+  MGMT_IP="$(aws --region "$REGION" fsx describe-file-systems --file-system-id "$FS_ID" \
+    --query 'FileSystems[0].OntapConfiguration.Endpoints.Management.IpAddresses' --output text \
+    | awk '{print $1}')"
+  if [ -z "$MGMT_IP" ]; then
+    echo "record-boundary: could not resolve a management IP for $FS_ID" >&2
+    exit 2
+  fi
+}
 
-mkdir -p "$OUT_DIR"
+read_ontap_password() {
+  aws --region "$REGION" secretsmanager get-secret-value \
+    --secret-id "$SECRET_ID" --query SecretString --output text \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["password"])'
+}
+
+# GET a path over the ONTAP REST API. Under dry-run the GET is printed (credential redacted) and an
+# empty JSON object is returned so the capture code runs without a call. -k is required because the
+# management endpoint's certificate CN is the management DNS name while this reaches it by the
+# management IP, so IP-based hostname verification cannot match.
+#
+# curl without -f exits 0 on an HTTP error, and the record builder reads an error body as "no
+# records", so a failed GET would be recorded as no export policies, no name mappings or no
+# snapshots. The status is therefore read with -w and checked: a transport error or an HTTP status
+# >= 400 exits 1 and no record is written. Callers run this as X="$(ontap_get ...)" || exit 1.
+ontap_get() {
+  local path="$1"
+  if [ -n "$DRY_RUN" ]; then
+    echo "DRY-RUN: curl -sS -k -u fsxadmin:<redacted> https://$MGMT_IP$path" >&2
+    printf '{}'
+    return 0
+  fi
+  local body status esc
+  body="$(mktemp)"
+  # The credential goes to curl on stdin as a config line (-K -), never in argv, where any local
+  # process could read it from /proc.
+  esc="${ONTAP_PW//\\/\\\\}"
+  esc="${esc//\"/\\\"}"
+  if ! status="$(printf 'user = "fsxadmin:%s"\n' "$esc" \
+      | curl -sS -k -K - -o "$body" -w '%{http_code}' "https://$MGMT_IP$path")" \
+    || ! [[ "$status" =~ ^[1-5][0-9][0-9]$ ]]; then
+    rm -f "$body"
+    echo "record-boundary: GET $path failed before an HTTP status (curl transport error, status '${status:-}')" >&2
+    exit 1
+  fi
+  if [ "$status" -ge 400 ]; then
+    echo "record-boundary: GET $path returned HTTP $status; no record written" >&2
+    cat "$body" >&2 || true
+    echo >&2
+    rm -f "$body"
+    exit 1
+  fi
+  cat "$body"
+  rm -f "$body"
+}
+
+echo "record-boundary: $BOUNDARY run $RUN_ID from ${MGMT_IP:-<unresolved>} (read-only)"
+resolve_mgmt_ip
+
+if [ -z "$DRY_RUN" ]; then
+  ONTAP_PW="$(read_ontap_password)" || { echo "record-boundary: could not read $SECRET_ID" >&2; exit 1; }
+  trap 'unset ONTAP_PW 2>/dev/null || true' EXIT
+fi
+
+# The five GETs that supply the record. snapshot_locking_enabled and snaplock.type are READ here,
+# never set; reading them is explicitly allowed by the irreversibility guard.
+CLUSTER_JSON="$(ontap_get "/api/cluster?fields=version")" || exit 1
+VOLUMES_JSON="$(ontap_get "/api/storage/volumes?fields=name,uuid,nas.security_style,nas.export_policy.name,snapshot_locking_enabled,snaplock.type")" || exit 1
+VOL_UUID_JSON="$(ontap_get "/api/storage/volumes?name=$VOLUME&fields=uuid")" || exit 1
+EXPORT_JSON="$(ontap_get "/api/protocols/nfs/export-policies?svm.name=$SVM&fields=name,rules")" || exit 1
+# Without fields= the collection returns only direction and index, which recorded every mapping
+# with a null pattern (live 2026-10-07).
+NAMEMAP_JSON="$(ontap_get "/api/name-services/name-mappings?svm.name=$SVM&fields=direction,index,pattern,replacement")" || exit 1
+
+# Resolve the target volume UUID so the snapshot list can be fetched for it. Under dry-run this
+# yields an empty id and the snapshot GET is still printed with the placeholder.
+VOL_UUID="$(printf '%s' "$VOL_UUID_JSON" | python3 -c 'import json,sys
+try:
+    r=json.load(sys.stdin).get("records",[])
+    print(r[0]["uuid"] if r else "")
+except Exception:
+    print("")')"
+SNAP_JSON="$(ontap_get "/api/storage/volumes/${VOL_UUID:-<appdata-uuid>}/snapshots?fields=name,create_time")" || exit 1
+
 WIN_SHA="$(sha_of "$WIN_INV")"
 LNX_SHA="$(sha_of "$LNX_INV")"
+
+OUT_DIR=".private/runs/$RUN_ID"
+mkdir -p "$OUT_DIR"
 OUT_FILE="$OUT_DIR/$BOUNDARY.json"
 
-# Emit the record skeleton. In-environment, the <...> values are filled from the REST responses
-# above. Written now so check-invariant.py has a stable shape to consume.
-cat >"$OUT_FILE" <<EOF
-{
-  "boundary": "$BOUNDARY",
-  "ontap_version": "<from GET /api/cluster>",
-  "volume_uuid": "<appdata uuid>",
-  "security_style": "ntfs",
-  "inventories": {
-    "windows": {"path": "${WIN_INV:-}", "sha256": "${WIN_SHA:-}"},
-    "linux": {"path": "${LNX_INV:-}", "sha256": "${LNX_SHA:-}"}
-  },
-  "top_level_paths": ["seed", "probe", "out"],
-  "snapshots": [],
-  "snapshot_locking_enabled": false
+# Build the record from the captured responses. A real run fills every ONTAP field from the GETs
+# above; a dry-run leaves the ONTAP-derived fields as explicit "(dry-run)" markers (never <...>
+# placeholders) while still filling the locally computable inventory references.
+APPMOD_BOUNDARY="$BOUNDARY" \
+APPMOD_DRY_RUN="$DRY_RUN" \
+APPMOD_TARGET_VOLUME="$VOLUME" \
+APPMOD_CLUSTER="$CLUSTER_JSON" \
+APPMOD_VOLUMES="$VOLUMES_JSON" \
+APPMOD_VOL_UUID="$VOL_UUID" \
+APPMOD_EXPORT="$EXPORT_JSON" \
+APPMOD_NAMEMAP="$NAMEMAP_JSON" \
+APPMOD_SNAP="$SNAP_JSON" \
+APPMOD_WIN_INV="$WIN_INV" APPMOD_WIN_SHA="$WIN_SHA" \
+APPMOD_LNX_INV="$LNX_INV" APPMOD_LNX_SHA="$LNX_SHA" \
+APPMOD_OUT_FILE="$OUT_FILE" python3 - <<'PY'
+import json
+import os
+
+
+def loads(name):
+    try:
+        return json.loads(os.environ.get(name, "") or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+
+dry = bool(os.environ.get("APPMOD_DRY_RUN"))
+target = os.environ["APPMOD_TARGET_VOLUME"]
+cluster = loads("APPMOD_CLUSTER")
+volumes = loads("APPMOD_VOLUMES").get("records", [])
+export = loads("APPMOD_EXPORT").get("records", [])
+namemap = loads("APPMOD_NAMEMAP").get("records", [])
+snaps = loads("APPMOD_SNAP").get("records", [])
+
+version = (cluster.get("version") or {}).get("full")
+uuid = os.environ.get("APPMOD_VOL_UUID") or None
+
+# Target volume record (for UUID, security style, snapshot-locking, snaplock.type).
+target_record = next((v for v in volumes if v.get("name") == target), None)
+
+if dry:
+    marker = "(dry-run; filled from ONTAP on a real run)"
+    ontap_version = version or marker
+    volume_uuid = uuid or marker
+    security_style = (
+        ((target_record or {}).get("nas") or {}).get("security_style") or "ntfs"
+    )
+    locking = bool(((target_record or {}) or {}).get("snapshot_locking_enabled"))
+else:
+    ontap_version = version
+    volume_uuid = uuid
+    security_style = ((target_record or {}).get("nas") or {}).get("security_style")
+    locking = bool((target_record or {}).get("snapshot_locking_enabled"))
+
+export_policies = [
+    {"name": e.get("name"), "rule_count": len(e.get("rules", []))} for e in export
+]
+name_mappings = [
+    {
+        "direction": m.get("direction"),
+        "index": m.get("index"),
+        "pattern": m.get("pattern"),
+        "replacement": m.get("replacement"),
+    }
+    for m in namemap
+]
+snapshot_names = [s.get("name") for s in snaps]
+
+# The top-level listing comes from the Windows inventory (inventory.ps1, Get-ChildItem -Force over
+# SMB), the one source the design fixes for it. It used to be written here as a constant, which made
+# the invariant's top-level check compare a constant with itself.
+top_level = None
+win_inv_path = os.environ.get("APPMOD_WIN_INV", "")
+if win_inv_path:
+    try:
+        with open(win_inv_path, encoding="utf-8-sig") as handle:
+            listing = json.load(handle).get("top_level")
+        if isinstance(listing, list):
+            top_level = [str(x) for x in listing]
+    except (OSError, json.JSONDecodeError, AttributeError):
+        top_level = None
+if top_level is None and not dry:
+    raise SystemExit(
+        "record-boundary: the Windows inventory has no top_level listing; "
+        "re-run inventory.ps1 (it emits top_level) before recording the boundary"
+    )
+volume_list = [
+    {
+        "name": v.get("name"),
+        "uuid": v.get("uuid"),
+        "export_policy": ((v.get("nas") or {}).get("export_policy") or {}).get("name", ""),
+        "snapshot_locking_enabled": bool(v.get("snapshot_locking_enabled")),
+        "snaplock_type": (v.get("snaplock") or {}).get("type", ""),
+    }
+    for v in volumes
+]
+
+record = {
+    "boundary": os.environ["APPMOD_BOUNDARY"],
+    "ontap_version": ontap_version,
+    "volume_uuid": volume_uuid,
+    "security_style": security_style,
+    "export_policies": export_policies,
+    "name_mappings": name_mappings,
+    "inventories": {
+        "windows": {
+            "path": os.environ.get("APPMOD_WIN_INV", ""),
+            "sha256": os.environ.get("APPMOD_WIN_SHA", ""),
+        },
+        "linux": {
+            "path": os.environ.get("APPMOD_LNX_INV", ""),
+            "sha256": os.environ.get("APPMOD_LNX_SHA", ""),
+        },
+    },
+    "top_level_paths": top_level,
+    "snapshots": snapshot_names,
+    "volumes": volume_list,
+    "snapshot_locking_enabled": locking,
 }
-EOF
+
+# A real run must never emit <...> placeholders for the ONTAP-derived fields.
+if not dry:
+    for key in ("ontap_version", "volume_uuid", "security_style"):
+        value = record[key]
+        if value is None or (isinstance(value, str) and value.startswith("<")):
+            raise SystemExit(
+                f"record-boundary: {key} not captured from ONTAP (got {value!r})"
+            )
+
+with open(os.environ["APPMOD_OUT_FILE"], "w", encoding="utf-8") as handle:
+    json.dump(record, handle, indent=2)
+PY
+
 echo "record-boundary: wrote $OUT_FILE"
