@@ -118,7 +118,18 @@ The second run used the correct SVM name, passed steps 0 to 10, and finished wit
 - Step 9 deleted the four secrets without a recovery window
 - The API enumeration of step 10 found nothing left on its second check (file system, SVM, volumes, backups, S3 Access Points attachments, directory, tagged EC2, ENIs and endpoints, secrets). On the first check the four secrets were still listed
 
-Step 11 (the Cost Explorer check on a later day) has not been done yet.
+For step 11, Cost Explorer was checked per resource on 2026-10-09. All values are pre-close estimates (`Estimated`) and cover usage only (`RECORD_TYPE=Usage`), excluding credits and refunds.
+
+| Resource | 2026-10-07 | 2026-10-08 |
+|---|---|---|
+| File system | $4.01 | $0.00 |
+| Windows EC2 | $0.98 | $0.00 |
+| Linux EC2 | $0.39 | $0.00 |
+| Control: two other file systems in the same account that kept running | $8.70 each | $5.07-$5.08 each |
+
+- The 10-08 data was partly in: the control file systems already carried about 60% of their usual daily amount, while the deleted resources showed nothing. That contrast is the basis for concluding that billing stopped after deletion. Until the 10-08 values close, the conclusion rests on estimates
+- The EC2 amounts are lower than the arithmetic estimate, which counted every hour, because the instances were stopped between work sessions and the stopped time was not billed
+- Cost Explorer shows no per-resource amount for AWS Managed Microsoft AD or the interface endpoints. Another directory in the same account kept running, so the service total cannot separate them
 
 ## Arithmetic estimate of billed hours
 
@@ -138,7 +149,7 @@ $0.8015 per hour; times 11.6 hours this is about $9.3.
   EC2 $0.1364, Linux EC2 $0.0544, EBS gp3 $0.0092, interface endpoints $0.084, Secrets Manager $0.0022
 - Both EC2 instances are counted for the whole period. Data transfer, Systems Manager and S3
   requests are not included
-- The billed amount is not known until it is checked in Cost Explorer, and that check has not been done yet
+- For the resources Cost Explorer shows per resource (the file system and the two EC2 instances), 10-07 totals $5.38, an estimate (see the table in the teardown record). The billed amount for AD and the endpoints cannot be confirmed per resource
 
 ## How estimates are produced
 
@@ -148,5 +159,5 @@ retrieved is written as "not retrieved".
 
 ## Still unconfirmed
 
-- In Cost Explorer on a later day: that billing stopped after deletion, and the actual billed amount
+- The 10-07 and 10-08 Cost Explorer values closing (still estimates as of 2026-10-09)
 - With the interface endpoints in a single AZ, whether the Systems Manager traffic went through them
