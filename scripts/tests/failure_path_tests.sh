@@ -401,7 +401,12 @@ cat >"$SW_MOCK/git" <<'MOCK'
 #!/bin/bash
 if [ "$1" = "clone" ]; then
   for dest; do :; done
-  mkdir -p "$dest/.git"; printf '#!/bin/bash\nexit 0\n' >"$dest/install.sh"; exit 0
+  # The stub install.sh writes the agent config into its current directory, as the real one does,
+  # so step 4 finds it only when setup-workspace.sh ran install.sh inside the workspace.
+  mkdir -p "$dest/.git"
+  printf '%s\n' '#!/bin/bash' 'mkdir -p .kiro/agents' \
+    'echo "{\"hooks\": {}}" >.kiro/agents/migration.json' >"$dest/install.sh"
+  exit 0
 fi
 if [ "$1" = "-C" ]; then
   repo="$2"; shift 2
@@ -410,7 +415,10 @@ if [ "$1" = "-C" ]; then
     init) mkdir -p "$repo/.git" ;;
     check-ignore) exit 0 ;;
     remote)
-      if [ -n "${MOCK_GIT_REMOTE_FAIL:-}" ]; then echo "fatal: not a git repository" >&2; exit 128; fi ;;
+      # Only `remote -v` (step 7) fails; step 1's plain `remote` lists nothing.
+      if [ -n "${MOCK_GIT_REMOTE_FAIL:-}" ] && [ "${2:-}" = "-v" ]; then
+        echo "fatal: not a git repository" >&2; exit 128
+      fi ;;
   esac
   exit 0
 fi

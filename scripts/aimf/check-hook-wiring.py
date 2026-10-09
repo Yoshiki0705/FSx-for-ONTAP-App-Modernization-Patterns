@@ -57,28 +57,48 @@ def matcher_covers(matcher: object) -> bool:
     return False
 
 
-def commands_of(site: dict) -> list[tuple[str, object]]:
-    """Return (command_string, matcher) pairs from one wiring site.
+def _preToolUse_entries(site: dict) -> list[dict]:
+    """Collect the PreToolUse entries of one wiring site, whichever shape it uses.
 
-    Accepts the workspace v1 shape {"hooks":[{"matcher":...,"command":...}]} and the agent-config
-    shape {"preToolUse":[{"matcher":...,"command":...}]}; also tolerates a nested
-    {"hooks":[{"type":"command","command":...}]}.
+    - workspace v1 file: {"version":"v1","hooks":[{"trigger":"PreToolUse","matcher":...,
+      "action":{"type":"command","command":...}}]}. An entry with another trigger does not count.
+    - agent config written by AIMF install.sh: {"hooks":{"preToolUse":[{"matcher":...,
+      "command":...}]}}. The list sits under "hooks", keyed by event, not at the top level.
+    - a top-level {"preToolUse":[...]} is also accepted.
+    """
+    entries: list[dict] = []
+    hooks = site.get("hooks")
+    if isinstance(hooks, list):
+        entries += [
+            e
+            for e in hooks
+            if isinstance(e, dict) and e.get("trigger", "PreToolUse") == "PreToolUse"
+        ]
+    elif isinstance(hooks, dict):
+        entries += [e for e in hooks.get("preToolUse") or [] if isinstance(e, dict)]
+    entries += [e for e in site.get("preToolUse") or [] if isinstance(e, dict)]
+    return entries
+
+
+def commands_of(site: dict) -> list[tuple[str, object]]:
+    """Return (command_string, matcher) pairs from one wiring site's PreToolUse entries.
+
+    The command is read from "command", from the v1 "action.command", or from a nested
+    {"hooks":[{"type":"command","command":...}]} list.
     """
     pairs: list[tuple[str, object]] = []
-    for key in ("hooks", "preToolUse"):
-        for entry in site.get(key, []):
-            if not isinstance(entry, dict):
-                continue
-            matcher = entry.get("matcher")
-            command = entry.get("command")
-            if isinstance(command, str):
-                pairs.append((command, matcher))
-            # nested command list form
-            for nested in (
-                entry.get("hooks", []) if isinstance(entry.get("hooks"), list) else []
-            ):
-                if isinstance(nested, dict) and isinstance(nested.get("command"), str):
-                    pairs.append((nested["command"], matcher))
+    for entry in _preToolUse_entries(site):
+        matcher = entry.get("matcher")
+        command = entry.get("command")
+        if isinstance(command, str):
+            pairs.append((command, matcher))
+        action = entry.get("action")
+        if isinstance(action, dict) and isinstance(action.get("command"), str):
+            pairs.append((action["command"], matcher))
+        nested_list = entry.get("hooks") if isinstance(entry.get("hooks"), list) else []
+        for nested in nested_list:
+            if isinstance(nested, dict) and isinstance(nested.get("command"), str):
+                pairs.append((nested["command"], matcher))
     return pairs
 
 
@@ -128,32 +148,41 @@ def remote_problems(workspace: Path) -> list[str]:
 
 
 def _good_sites(guard_abs: str) -> tuple[dict, dict]:
+    """The shapes setup-workspace.sh writes: a v1 workspace file and AIMF's agent config."""
     regex = "^(execute_bash|shell|use_aws|aws)$"
+    commands = (
+        f"python3 {guard_abs}",
+        "python3 scripts/aimf/hook_canary.py --source {source}",
+        "python3 scripts/aimf/block_direct_atx.py",
+    )
     workspace = {
+        "version": "v1",
         "hooks": [
-            {"matcher": regex, "command": f"python3 {guard_abs}"},
             {
+                "name": f"hook {n}",
+                "trigger": "PreToolUse",
                 "matcher": regex,
-                "command": "python3 scripts/aimf/hook_canary.py --source workspace-hook",
-            },
-            {"matcher": regex, "command": "python3 scripts/aimf/block_direct_atx.py"},
-        ]
+                "action": {
+                    "type": "command",
+                    "command": c.format(source="workspace-hook"),
+                },
+            }
+            for n, c in enumerate(commands)
+        ],
     }
     agent = {
-        "preToolUse": [
-            {
-                "matcher": ["execute_bash", "shell", "use_aws", "aws"],
-                "command": f"python3 {guard_abs}",
-            },
-            {
-                "matcher": ["execute_bash", "shell", "use_aws", "aws"],
-                "command": "python3 scripts/aimf/hook_canary.py --source agent-config",
-            },
-            {
-                "matcher": ["execute_bash", "shell", "use_aws", "aws"],
-                "command": "python3 scripts/aimf/block_direct_atx.py",
-            },
-        ]
+        "name": "migration",
+        "hooks": {
+            "userPromptSubmit": [{"command": "03-worklog/turn-log.sh"}],
+            "preToolUse": [{"command": "03-worklog/work-declaration-guard.sh"}]
+            + [
+                {
+                    "matcher": ["execute_bash", "shell", "use_aws", "aws"],
+                    "command": c.format(source="agent-config"),
+                }
+                for c in commands
+            ],
+        },
     }
     return workspace, agent
 
@@ -169,14 +198,29 @@ def selftest() -> int:
     # Missing wiring: drop block_direct_atx.py from the workspace site.
     missing_ws = json.loads(json.dumps(good_ws))
     missing_ws["hooks"] = [
-        h for h in missing_ws["hooks"] if "block_direct_atx" not in h["command"]
+        h
+        for h in missing_ws["hooks"]
+        if "block_direct_atx" not in h["action"]["command"]
     ]
     if not check_sites(missing_ws, good_agent, guard_abs):
         failures.append("a missing hook should fail")
 
+    # Missing wiring in the agent config: install.sh rewrote it and dropped our entries.
+    rewritten_agent = json.loads(json.dumps(good_agent))
+    rewritten_agent["hooks"]["preToolUse"] = rewritten_agent["hooks"]["preToolUse"][:1]
+    if not check_sites(good_ws, rewritten_agent, guard_abs):
+        failures.append("an agent config without our preToolUse entries should fail")
+
+    # A hook under a trigger other than PreToolUse does not count as PreToolUse wiring.
+    wrong_trigger_ws = json.loads(json.dumps(good_ws))
+    for entry in wrong_trigger_ws["hooks"]:
+        entry["trigger"] = "PostToolUse"
+    if not check_sites(wrong_trigger_ws, good_agent, guard_abs):
+        failures.append("a PostToolUse hook should not count as PreToolUse wiring")
+
     # Narrow matcher: agent config matcher only covers execute_bash.
     narrow_agent = json.loads(json.dumps(good_agent))
-    for entry in narrow_agent["preToolUse"]:
+    for entry in narrow_agent["hooks"]["preToolUse"]:
         entry["matcher"] = ["execute_bash"]
     if not check_sites(good_ws, narrow_agent, guard_abs):
         failures.append("a matcher narrower than the Hub set should fail")
@@ -184,8 +228,10 @@ def selftest() -> int:
     # Guard referenced by a non-tracked path should fail.
     wrong_path_ws = json.loads(json.dumps(good_ws))
     for entry in wrong_path_ws["hooks"]:
-        if "guard_irreversible_ops" in entry["command"]:
-            entry["command"] = "python3 /home/x/.kiro/guard_irreversible_ops.py"
+        if "guard_irreversible_ops" in entry["action"]["command"]:
+            entry["action"]["command"] = (
+                "python3 /home/x/.kiro/guard_irreversible_ops.py"
+            )
     if not check_sites(wrong_path_ws, good_agent, guard_abs):
         failures.append("guard referenced by an untracked path should fail")
 
@@ -194,7 +240,8 @@ def selftest() -> int:
     if failures:
         return 1
     print(
-        "selftest: wiring check passes a good pair and fails missing/narrow/untracked-path"
+        "selftest: wiring check passes a good pair and fails "
+        "missing/rewritten/wrong-trigger/narrow/untracked-path"
     )
     return 0
 
