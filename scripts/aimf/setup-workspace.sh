@@ -28,6 +28,8 @@ WORKSPACE="${APPMOD_AIMF_WORKSPACE:-$REPO_ROOT/.private/aimf}"
 UPSTREAM="$WORKSPACE/upstream"
 PROJECT_DIR="$WORKSPACE/DocIntake"
 GUARD_ABS="$REPO_ROOT/scripts/guard_irreversible_ops.py"
+CANARY_ABS="$REPO_ROOT/scripts/aimf/hook_canary.py"
+ATX_BLOCK_ABS="$REPO_ROOT/scripts/aimf/block_direct_atx.py"
 SEND_CONFIG="$REPO_ROOT/scripts/aimf/gitleaks-send.toml"
 
 run() {
@@ -40,7 +42,12 @@ run() {
 
 step1_clone() {
   echo "1 clone AIMF $AIMF_TAG into $UPSTREAM and verify commit $AIMF_COMMIT"
-  run git clone --branch "$AIMF_TAG" --depth 1 "$AIMF_REPO" "$UPSTREAM"
+  # On a re-run the clone already exists; git clone would refuse it, so only the commit is checked.
+  if [ -d "$UPSTREAM/.git" ]; then
+    echo "   $UPSTREAM exists; verifying its commit instead of cloning again"
+  else
+    run git clone --branch "$AIMF_TAG" --depth 1 "$AIMF_REPO" "$UPSTREAM"
+  fi
   if [ -z "$DRY_RUN" ]; then
     local head
     head="$(git -C "$UPSTREAM" rev-parse HEAD)"
@@ -48,6 +55,16 @@ step1_clone() {
       echo "setup-workspace: cloned commit $head != pinned $AIMF_COMMIT" >&2
       exit 1
     fi
+    # Step 7 requires every repository under the workspace to have no remote, and the clone is only
+    # read after this point, so its origin is removed once the commit is verified.
+    local remotes name
+    if ! remotes="$(git -C "$UPSTREAM" remote)"; then
+      echo "setup-workspace: could not read the remotes of $UPSTREAM" >&2
+      exit 1
+    fi
+    for name in $remotes; do
+      git -C "$UPSTREAM" remote remove "$name"
+    done
   fi
 }
 
@@ -60,18 +77,97 @@ step2_copy() {
 
 step3_install() {
   echo "3 run install.sh for dotnetfw-to-modern-dotnet"
-  run bash "$UPSTREAM/install.sh" --project DocIntake \
-    --playbook dotnetfw-to-modern-dotnet --lang ja --tool kiro
+  # install.sh installs into its current directory (WORKSPACE="$(pwd)"), so it must run inside the
+  # workspace; run from the Spoke root it would write .kiro/ and the records repository there.
+  # It refuses an existing records repository, so a re-run reinstalls the rules only.
+  local skip=()
+  if [ -n "$(find "$WORKSPACE" -maxdepth 1 -type d -name 'DocIntake-migration-*' 2>/dev/null)" ]; then
+    echo "   a DocIntake-migration-* records repository exists; re-running with --skip-project"
+    skip=(--skip-project)
+  fi
+  if [ -n "$DRY_RUN" ]; then
+    echo "DRY-RUN: (cd $WORKSPACE && bash $UPSTREAM/install.sh --project DocIntake" \
+      "--playbook dotnetfw-to-modern-dotnet --lang ja --tool kiro ${skip[*]+${skip[*]}})"
+    return 0
+  fi
+  (cd "$WORKSPACE" && bash "$UPSTREAM/install.sh" --project DocIntake \
+    --playbook dotnetfw-to-modern-dotnet --lang ja --tool kiro ${skip[@]+"${skip[@]}"})
 }
 
 step4_wire() {
   echo "4 write hook wiring at both sites and run check-hook-wiring.py"
-  # In a real run the wiring JSON is written here; the shapes are the ones check-hook-wiring.py
-  # accepts. This script prints the intended write; the actual file content is environment-specific.
-  echo "   guard: python3 $GUARD_ABS"
-  echo "   canary: python3 $REPO_ROOT/scripts/aimf/hook_canary.py --source <site>"
-  echo "   atx-block: python3 $REPO_ROOT/scripts/aimf/block_direct_atx.py"
-  echo "   (verify with: check-hook-wiring.py --workspace-hook <f> --agent-config <f> --guard $GUARD_ABS)"
+  local agent_cfg="$WORKSPACE/.kiro/agents/migration.json"
+  local hook_file="$WORKSPACE/.kiro/hooks/block-unilateral-worm-enablement.json"
+  if [ -n "$DRY_RUN" ]; then
+    echo "DRY-RUN: would write $hook_file and add 3 preToolUse hooks to $agent_cfg"
+    return 0
+  fi
+  if [ ! -f "$agent_cfg" ]; then
+    echo "setup-workspace: install.sh did not create $agent_cfg" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$hook_file")"
+  # The same three hooks at both sites (design 案 C): the Hub regex in the workspace file, exact tool
+  # names in the agent config (see the note in the Python below). install.sh rewrites the
+  # agent config on every run, so our entries are re-added after AIMF's own preToolUse entry, and any
+  # earlier copy of them is dropped first so a re-run does not duplicate them.
+  python3 - "$agent_cfg" "$hook_file" "$GUARD_ABS" "$CANARY_ABS" "$ATX_BLOCK_ABS" <<'PY'
+import json
+import shlex
+import sys
+
+agent_path, hook_path, guard, canary, atx_block = sys.argv[1:6]
+MATCHER = "^(execute_bash|shell|use_aws|aws)$"
+OURS = ("guard_irreversible_ops.py", "hook_canary.py", "block_direct_atx.py")
+
+
+def commands(source):
+    return [
+        ("Block unilateral WORM enablement", f"python3 {shlex.quote(guard)}"),
+        ("AIMF hook canary", f"python3 {shlex.quote(canary)} --source {source}"),
+        ("Block direct atx", f"python3 {shlex.quote(atx_block)}"),
+    ]
+
+
+workspace_doc = {
+    "version": "v1",
+    "hooks": [
+        {
+            "name": name,
+            "trigger": "PreToolUse",
+            "matcher": MATCHER,
+            "action": {"type": "command", "command": command, "timeout": 30},
+        }
+        for name, command in commands("workspace-hook")
+    ],
+}
+with open(hook_path, "w", encoding="utf-8") as handle:
+    json.dump(workspace_doc, handle, indent=2)
+    handle.write("\n")
+
+with open(agent_path, encoding="utf-8") as handle:
+    agent = json.load(handle)
+hooks = agent.setdefault("hooks", {})
+kept = [
+    entry
+    for entry in hooks.get("preToolUse") or []
+    if not any(name in str(entry.get("command", "")) for name in OURS)
+]
+# The agent config takes one exact tool name per entry (U28, observed 2026-10-09 with kiro-cli
+# 2.28.0): the V2 engine, which plain `kiro-cli chat` runs, matched neither the Hub regex nor
+# "execute_bash|use_aws", and refused to load the agent when the matcher was a list. Each name
+# also matches its documented alias (shell, aws).
+hooks["preToolUse"] = kept + [
+    {"matcher": tool, "command": command, "timeout_ms": 30000}
+    for _, command in commands("agent-config")
+    for tool in ("execute_bash", "use_aws")
+]
+with open(agent_path, "w", encoding="utf-8") as handle:
+    json.dump(agent, handle, indent=2)
+    handle.write("\n")
+PY
+  python3 "$REPO_ROOT/scripts/aimf/check-hook-wiring.py" --workspace "$WORKSPACE" \
+    --workspace-hook "$hook_file" --agent-config "$agent_cfg" --guard "$GUARD_ABS"
 }
 
 step5_ignored() {

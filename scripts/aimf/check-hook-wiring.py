@@ -13,10 +13,18 @@ and the two sites are:
   - the workspace hook file  (.kiro/hooks/*.json, v1 format)
   - the agent config preToolUse  (.kiro/agents/migration.json)
 
-A site's matcher must cover the same tools as the Hub matcher: execute_bash, shell, use_aws, aws.
-Two matcher formats are accepted because the agent config's matcher may or may not take a regex
-(U28): either a regex such as ^(execute_bash|shell|use_aws|aws)$, or an explicit list of tool names.
-A matcher narrower than the Hub set fails.
+Each hook's matchers at a site, taken together, must cover the same tools as the Hub matcher:
+execute_bash, shell, use_aws, aws. Kiro documents shell/execute_bash and aws/use_aws as aliases of
+one tool each, so an exact name covers its alias. The two sites take different matcher formats
+(U28, observed 2026-10-09 with kiro-cli 2.28.0):
+
+  - workspace v1 file: a regex such as ^(execute_bash|shell|use_aws|aws)$ (read by the V3 engine
+    only; the V2 engine does not read this file).
+  - agent config: one exact tool name per entry, e.g. "execute_bash" and "use_aws". The V2 engine
+    (the default) matched neither the regex nor "execute_bash|use_aws", so such an entry never
+    fires there; a JSON list makes V2 refuse to load the agent. Either is a failure here.
+
+A matcher set narrower than the Hub set fails.
 
 The guard must be referenced by the tracked absolute path; a copy under .kiro/ or $HOME is invisible
 to collaborators and drifts.
@@ -44,45 +52,88 @@ REQUIRED_TOOLS = {"execute_bash", "shell", "use_aws", "aws"}
 REQUIRED_HOOKS = ("guard_irreversible_ops.py", "hook_canary.py", "block_direct_atx.py")
 
 
-def matcher_covers(matcher: object) -> bool:
-    """True when a matcher (regex string or list of tool names) covers every required tool."""
-    if isinstance(matcher, list):
-        return REQUIRED_TOOLS.issubset(set(matcher))
+ALIASES = ({"execute_bash", "shell"}, {"use_aws", "aws"})
+EXACT_NAME = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _with_aliases(tools: set[str]) -> set[str]:
+    covered = set(tools)
+    for group in ALIASES:
+        if covered & group:
+            covered |= group
+    return covered
+
+
+def covered_tools(matcher: object, site_kind: str) -> set[str]:
+    """Required tools one matcher covers at a site of the given kind ("workspace" or "agent")."""
+    if site_kind == "agent":
+        # Only an exact tool name fires under the V2 engine; it also covers its alias.
+        if isinstance(matcher, str) and EXACT_NAME.fullmatch(matcher):
+            return _with_aliases({matcher} & REQUIRED_TOOLS)
+        return set()
     if isinstance(matcher, str):
         try:
             pattern = re.compile(matcher)
         except re.error:
-            return False
-        return all(pattern.fullmatch(tool) for tool in REQUIRED_TOOLS)
-    return False
+            return set()
+        return {tool for tool in REQUIRED_TOOLS if pattern.fullmatch(tool)}
+    return set()
+
+
+def matcher_covers(matchers: list[object], site_kind: str) -> bool:
+    """True when the union of a hook's matchers at one site covers every required tool."""
+    covered: set[str] = set()
+    for matcher in matchers:
+        covered |= covered_tools(matcher, site_kind)
+    return REQUIRED_TOOLS.issubset(covered)
+
+
+def _preToolUse_entries(site: dict) -> list[dict]:
+    """Collect the PreToolUse entries of one wiring site, whichever shape it uses.
+
+    - workspace v1 file: {"version":"v1","hooks":[{"trigger":"PreToolUse","matcher":...,
+      "action":{"type":"command","command":...}}]}. An entry with another trigger does not count.
+    - agent config written by AIMF install.sh: {"hooks":{"preToolUse":[{"matcher":...,
+      "command":...}]}}. The list sits under "hooks", keyed by event, not at the top level.
+    - a top-level {"preToolUse":[...]} is also accepted.
+    """
+    entries: list[dict] = []
+    hooks = site.get("hooks")
+    if isinstance(hooks, list):
+        entries += [
+            e
+            for e in hooks
+            if isinstance(e, dict) and e.get("trigger", "PreToolUse") == "PreToolUse"
+        ]
+    elif isinstance(hooks, dict):
+        entries += [e for e in hooks.get("preToolUse") or [] if isinstance(e, dict)]
+    entries += [e for e in site.get("preToolUse") or [] if isinstance(e, dict)]
+    return entries
 
 
 def commands_of(site: dict) -> list[tuple[str, object]]:
-    """Return (command_string, matcher) pairs from one wiring site.
+    """Return (command_string, matcher) pairs from one wiring site's PreToolUse entries.
 
-    Accepts the workspace v1 shape {"hooks":[{"matcher":...,"command":...}]} and the agent-config
-    shape {"preToolUse":[{"matcher":...,"command":...}]}; also tolerates a nested
-    {"hooks":[{"type":"command","command":...}]}.
+    The command is read from "command", from the v1 "action.command", or from a nested
+    {"hooks":[{"type":"command","command":...}]} list.
     """
     pairs: list[tuple[str, object]] = []
-    for key in ("hooks", "preToolUse"):
-        for entry in site.get(key, []):
-            if not isinstance(entry, dict):
-                continue
-            matcher = entry.get("matcher")
-            command = entry.get("command")
-            if isinstance(command, str):
-                pairs.append((command, matcher))
-            # nested command list form
-            for nested in (
-                entry.get("hooks", []) if isinstance(entry.get("hooks"), list) else []
-            ):
-                if isinstance(nested, dict) and isinstance(nested.get("command"), str):
-                    pairs.append((nested["command"], matcher))
+    for entry in _preToolUse_entries(site):
+        matcher = entry.get("matcher")
+        command = entry.get("command")
+        if isinstance(command, str):
+            pairs.append((command, matcher))
+        action = entry.get("action")
+        if isinstance(action, dict) and isinstance(action.get("command"), str):
+            pairs.append((action["command"], matcher))
+        nested_list = entry.get("hooks") if isinstance(entry.get("hooks"), list) else []
+        for nested in nested_list:
+            if isinstance(nested, dict) and isinstance(nested.get("command"), str):
+                pairs.append((nested["command"], matcher))
     return pairs
 
 
-def site_problems(label: str, site: dict, guard_abs: str) -> list[str]:
+def site_problems(label: str, site: dict, guard_abs: str, site_kind: str) -> list[str]:
     pairs = commands_of(site)
     problems: list[str] = []
     for hook in REQUIRED_HOOKS:
@@ -96,16 +147,21 @@ def site_problems(label: str, site: dict, guard_abs: str) -> list[str]:
             problems.append(
                 f"{label}: guard is not referenced by the tracked path {guard_abs}"
             )
-        if not any(matcher_covers(m) for _, m in matching):
+        if not matcher_covers([m for _, m in matching], site_kind):
             problems.append(
-                f"{label}: {hook} matcher is narrower than {sorted(REQUIRED_TOOLS)}"
+                f"{label}: {hook} matchers do not cover {sorted(REQUIRED_TOOLS)}"
+                + (
+                    " (agent config needs exact tool names)"
+                    if site_kind == "agent"
+                    else ""
+                )
             )
     return problems
 
 
 def check_sites(workspace_site: dict, agent_site: dict, guard_abs: str) -> list[str]:
-    problems = site_problems("workspace-hook", workspace_site, guard_abs)
-    problems += site_problems("agent-config", agent_site, guard_abs)
+    problems = site_problems("workspace-hook", workspace_site, guard_abs, "workspace")
+    problems += site_problems("agent-config", agent_site, guard_abs, "agent")
     return problems
 
 
@@ -128,32 +184,39 @@ def remote_problems(workspace: Path) -> list[str]:
 
 
 def _good_sites(guard_abs: str) -> tuple[dict, dict]:
+    """The shapes setup-workspace.sh writes: a v1 workspace file and AIMF's agent config."""
     regex = "^(execute_bash|shell|use_aws|aws)$"
+    commands = (
+        f"python3 {guard_abs}",
+        "python3 scripts/aimf/hook_canary.py --source {source}",
+        "python3 scripts/aimf/block_direct_atx.py",
+    )
     workspace = {
+        "version": "v1",
         "hooks": [
-            {"matcher": regex, "command": f"python3 {guard_abs}"},
             {
+                "name": f"hook {n}",
+                "trigger": "PreToolUse",
                 "matcher": regex,
-                "command": "python3 scripts/aimf/hook_canary.py --source workspace-hook",
-            },
-            {"matcher": regex, "command": "python3 scripts/aimf/block_direct_atx.py"},
-        ]
+                "action": {
+                    "type": "command",
+                    "command": c.format(source="workspace-hook"),
+                },
+            }
+            for n, c in enumerate(commands)
+        ],
     }
     agent = {
-        "preToolUse": [
-            {
-                "matcher": ["execute_bash", "shell", "use_aws", "aws"],
-                "command": f"python3 {guard_abs}",
-            },
-            {
-                "matcher": ["execute_bash", "shell", "use_aws", "aws"],
-                "command": "python3 scripts/aimf/hook_canary.py --source agent-config",
-            },
-            {
-                "matcher": ["execute_bash", "shell", "use_aws", "aws"],
-                "command": "python3 scripts/aimf/block_direct_atx.py",
-            },
-        ]
+        "name": "migration",
+        "hooks": {
+            "userPromptSubmit": [{"command": "03-worklog/turn-log.sh"}],
+            "preToolUse": [{"command": "03-worklog/work-declaration-guard.sh"}]
+            + [
+                {"matcher": tool, "command": c.format(source="agent-config")}
+                for c in commands
+                for tool in ("execute_bash", "use_aws")
+            ],
+        },
     }
     return workspace, agent
 
@@ -169,23 +232,53 @@ def selftest() -> int:
     # Missing wiring: drop block_direct_atx.py from the workspace site.
     missing_ws = json.loads(json.dumps(good_ws))
     missing_ws["hooks"] = [
-        h for h in missing_ws["hooks"] if "block_direct_atx" not in h["command"]
+        h
+        for h in missing_ws["hooks"]
+        if "block_direct_atx" not in h["action"]["command"]
     ]
     if not check_sites(missing_ws, good_agent, guard_abs):
         failures.append("a missing hook should fail")
 
-    # Narrow matcher: agent config matcher only covers execute_bash.
+    # Missing wiring in the agent config: install.sh rewrote it and dropped our entries.
+    rewritten_agent = json.loads(json.dumps(good_agent))
+    rewritten_agent["hooks"]["preToolUse"] = rewritten_agent["hooks"]["preToolUse"][:1]
+    if not check_sites(good_ws, rewritten_agent, guard_abs):
+        failures.append("an agent config without our preToolUse entries should fail")
+
+    # A hook under a trigger other than PreToolUse does not count as PreToolUse wiring.
+    wrong_trigger_ws = json.loads(json.dumps(good_ws))
+    for entry in wrong_trigger_ws["hooks"]:
+        entry["trigger"] = "PostToolUse"
+    if not check_sites(wrong_trigger_ws, good_agent, guard_abs):
+        failures.append("a PostToolUse hook should not count as PreToolUse wiring")
+
+    # Narrow matcher: the agent config wires only execute_bash, so use_aws is unguarded.
     narrow_agent = json.loads(json.dumps(good_agent))
-    for entry in narrow_agent["preToolUse"]:
-        entry["matcher"] = ["execute_bash"]
+    narrow_agent["hooks"]["preToolUse"] = [
+        e for e in narrow_agent["hooks"]["preToolUse"] if e.get("matcher") != "use_aws"
+    ]
     if not check_sites(good_ws, narrow_agent, guard_abs):
         failures.append("a matcher narrower than the Hub set should fail")
+
+    # The agent config with the Hub regex, a pipe, or a list: none fires under the V2 engine.
+    for bad in (
+        "^(execute_bash|shell|use_aws|aws)$",
+        "execute_bash|use_aws",
+        ["execute_bash", "shell", "use_aws", "aws"],
+    ):
+        regex_agent = json.loads(json.dumps(good_agent))
+        for entry in regex_agent["hooks"]["preToolUse"][1:]:
+            entry["matcher"] = bad
+        if not check_sites(good_ws, regex_agent, guard_abs):
+            failures.append(f"agent-config matcher {bad!r} should fail")
 
     # Guard referenced by a non-tracked path should fail.
     wrong_path_ws = json.loads(json.dumps(good_ws))
     for entry in wrong_path_ws["hooks"]:
-        if "guard_irreversible_ops" in entry["command"]:
-            entry["command"] = "python3 /home/x/.kiro/guard_irreversible_ops.py"
+        if "guard_irreversible_ops" in entry["action"]["command"]:
+            entry["action"]["command"] = (
+                "python3 /home/x/.kiro/guard_irreversible_ops.py"
+            )
     if not check_sites(wrong_path_ws, good_agent, guard_abs):
         failures.append("guard referenced by an untracked path should fail")
 
@@ -194,7 +287,8 @@ def selftest() -> int:
     if failures:
         return 1
     print(
-        "selftest: wiring check passes a good pair and fails missing/narrow/untracked-path"
+        "selftest: wiring check passes a good pair and fails "
+        "missing/rewritten/wrong-trigger/narrow/non-exact-agent-matcher/untracked-path"
     )
     return 0
 

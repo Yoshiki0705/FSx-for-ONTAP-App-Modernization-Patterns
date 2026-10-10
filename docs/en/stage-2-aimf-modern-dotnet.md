@@ -15,6 +15,22 @@ stays through stage 3, so the security style is kept NTFS.
 4. Deploy the migrated code and run the Probe
 5. Prepare the security-style ADR and wait for a human decision (no switch in this verification)
 
+## Engine for the AIMF sessions
+
+The AIMF sessions use the default engine of kiro-cli 2.28.0 (V2) in interactive mode. On
+2026-10-10, a hook-firing canary on macOS with kiro-cli 2.28.0 showed the following.
+
+- V2 reads only the hooks written in the agent config. A matcher fires on an exact tool name and
+  never fired on the regular expression `^(execute_bash|shell|use_aws|aws)$` or on
+  `execute_bash|use_aws`. With a JSON list as the matcher, the agent itself failed to load.
+  `setup-workspace.sh` wires matchers that name each tool individually
+- A hook returning exit 2 stopped the tool call on both V2 and V3
+- V2 in non-interactive mode refused to run shell even with `--trust-tools=execute_bash,use_aws`.
+  The cause is not confirmed, so non-interactive mode is not used
+- V3 (`--v3`) reads hooks from three places (agent config, workspace, global) and also fired on the
+  regular-expression matcher, but has no `use_aws` tool. The hook that stops AWS calls would then target a different tool than on V2, so V3 is not
+  used in this verification
+
 ## What to confirm at the boundary
 
 - The target volume UUID and the `seed/` inventory are identical to stage 0
