@@ -7,7 +7,7 @@
     },
     "scripts/aimf/run-atx.sh": {
       "class": "fail-closed",
-      "reason": "real mode exits 2 until the atx invocation is verified and recorded (U8-U11)"
+      "reason": "real mode exits 2 unless the per-transformation verification record names the exact invocation, including --limit from the approved estimate"
     },
     "scripts/aimf/setup-workspace.sh": {
       "class": "external",

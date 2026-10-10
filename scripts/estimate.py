@@ -12,6 +12,12 @@ Three jobs, selected by flags:
                  and throughput and returns exit 4 if the template's fixed 1024 GiB / 128 MBps no
                  longer match the current minimum (so a human decides whether to adjust the fixed
                  values before deploying).
+                 --target atx requires --transformation (one of ATX_TRANSFORMATIONS) and
+                 --limit-minutes N (a positive integer). The estimate records both as parameters,
+                 run-atx.sh passes N to `atx custom def exec --limit`, and the total is the ceiling
+                 N x the agent-minute unit price. For AWS/dotnet-modernization the expected charge
+                 within the account's monthly no-cost quota is recorded separately as $0, with the
+                 caveat that this script cannot observe how much of the quota is left.
   --elapsed      Compute the elapsed fraction of the approved base time from approval.json and
                  return exit 3 when it exceeds 80%. The origin is always the base approval time; atx
                  / stage3 / teardown / base-update approvals do not move it, extend hours add to the
@@ -23,7 +29,8 @@ fraction over 80%; 4 (--target base only) the fixed minimum no longer matches th
 Prices and minimums reach this script through the AWS Price List API in production. In tests they
 are supplied as JSON fixtures via --price-fixture and --minimums-fixture, so no test makes a live
 call. When neither a fixture nor a reachable API is available, --target returns exit 1 rather than
-inventing numbers.
+inventing numbers. The atx unit price key is transform_agent_minute (Price List service
+AWSTransform, usagetype APN1-AgentMinute).
 """
 
 from __future__ import annotations
@@ -66,6 +73,28 @@ EXISTING_ID_PATTERNS = {
     "ExistingSecondAzSubnetId": re.compile(r"^subnet-[0-9a-f]{8,}$"),
     "ExistingDirectoryId": re.compile(r"^d-[0-9a-f]{10}$"),
 }
+
+
+# The AWS Transform custom transformations an atx estimate may authorize. run-atx.sh holds the same
+# two names in a `case`; dryrun_shell_tests.sh fails when the two lists differ.
+ATX_TRANSFORMATIONS = (
+    "AWS/comprehensive-codebase-analysis",
+    "AWS/dotnet-modernization",
+)
+ATX_DOTNET = "AWS/dotnet-modernization"
+# Monthly agent minutes included at no additional charge for AWS/dotnet-modernization
+# (https://aws.amazon.com/transform/pricing/, read 2026-10-10). The quota is per account per month;
+# how much of it is left cannot be read by this script.
+DOTNET_QUOTA_MINUTES = 50000
+DOTNET_EXPECTED_BASIS = (
+    f"within the {DOTNET_QUOTA_MINUTES:,} agent-minute monthly no-cost quota "
+    f"for {ATX_DOTNET}"
+)
+DOTNET_EXPECTED_CAVEAT = (
+    "quota consumption is not observable from this script; "
+    "if the quota is exhausted the ceiling applies"
+)
+LIMIT_MINUTES_PATTERN = re.compile(r"^[1-9][0-9]*$")
 
 
 class InputError(ValueError):
@@ -256,6 +285,48 @@ def validate_target_args(args: argparse.Namespace) -> None:
             raise InputError("--egress-mode is required for --target base")
         if args.egress_mode not in ("nat", "endpoints"):
             raise InputError("--egress-mode must be nat or endpoints")
+    transformation = getattr(args, "transformation", None)
+    limit_minutes = getattr(args, "limit_minutes", None)
+    if args.target == "atx":
+        if transformation is None:
+            raise InputError(
+                "--transformation is required for --target atx "
+                f"(one of {', '.join(ATX_TRANSFORMATIONS)})"
+            )
+        if transformation not in ATX_TRANSFORMATIONS:
+            raise InputError(
+                f"--transformation must be one of {', '.join(ATX_TRANSFORMATIONS)} "
+                f"(got {transformation!r})"
+            )
+        if limit_minutes is None:
+            raise InputError(
+                "--limit-minutes is required for --target atx "
+                "(the agent-minute cap passed to atx --limit)"
+            )
+        if not LIMIT_MINUTES_PATTERN.fullmatch(limit_minutes):
+            raise InputError(
+                f"--limit-minutes must be a positive integer (got {limit_minutes!r})"
+            )
+    else:
+        # A stray flag on another target would silently do nothing; refuse it instead.
+        for flag, value in (
+            ("--transformation", transformation),
+            ("--limit-minutes", limit_minutes),
+        ):
+            if value is not None:
+                raise InputError(f"{flag} applies only to --target atx")
+
+
+def build_atx_parameters(args: argparse.Namespace) -> list[dict[str, str]]:
+    """Return the atx run configuration as ParameterKey/Value pairs (same shape as base).
+
+    run-atx.sh reads Transformation and LimitMinutes from these pairs and nowhere else, so the cap a
+    human approved is the cap atx runs with. validate_target_args has already checked both values.
+    """
+    return [
+        {"ParameterKey": "Transformation", "ParameterValue": args.transformation},
+        {"ParameterKey": "LimitMinutes", "ParameterValue": args.limit_minutes},
+    ]
 
 
 def load_prices(fixture: Path | None) -> dict[str, float] | None:
@@ -284,10 +355,47 @@ def load_minimums(fixture: Path | None) -> dict[str, int] | None:
 
 
 def build_line_items(
-    prices: dict[str, float], target: str, hours: int, egress_mode: str | None
+    prices: dict[str, float],
+    target: str,
+    hours: int,
+    egress_mode: str | None,
+    transformation: str | None = None,
+    limit_minutes: int | None = None,
 ) -> list[dict[str, object]]:
     """Return estimate line items. A missing price is recorded as not-retrieved, never guessed."""
     items: list[dict[str, object]] = []
+
+    if target == "atx" and limit_minutes is not None:
+        # The ceiling: atx stops (exit 2) once the run has used limit_minutes agent minutes.
+        unit = prices.get("transform_agent_minute")
+        items.append(
+            {
+                "label": f"AWS Transform custom agent minutes (ceiling, --limit {limit_minutes})",
+                "transformation": transformation,
+                "unit_usd": unit,
+                "agent_minutes": limit_minutes,
+                "hours": 0,
+                "subtotal_usd": None
+                if unit is None
+                else round(unit * limit_minutes, 2),
+                "note": "not retrieved" if unit is None else "",
+            }
+        )
+        if transformation == ATX_DOTNET:
+            # Expected charge inside the no-cost quota. subtotal_usd stays null so it never adds
+            # to (or replaces) the ceiling in total_usd.
+            items.append(
+                {
+                    "label": "AWS Transform custom agent minutes (expected, within the monthly quota)",
+                    "transformation": transformation,
+                    "unit_usd": 0.0,
+                    "agent_minutes": limit_minutes,
+                    "hours": 0,
+                    "subtotal_usd": None,
+                    "note": f"{DOTNET_EXPECTED_BASIS}; {DOTNET_EXPECTED_CAVEAT}",
+                }
+            )
+        return items
 
     def monthly_to_hourly(key: str, qty: float) -> float | None:
         unit = prices.get(key)
@@ -359,8 +467,17 @@ def write_estimate(
     # The CloudFormation parameters the approved estimate authorizes. deploy.sh reads this object
     # and passes exactly these to create-stack; an estimate without it is refused rather than
     # deployed with template defaults.
+    # For atx the same object carries Transformation and LimitMinutes, which run-atx.sh reads.
     if parameters is not None:
         payload["parameters"] = parameters
+        pairs = {p["ParameterKey"]: p["ParameterValue"] for p in parameters}
+        if target == "atx" and pairs.get("Transformation") == ATX_DOTNET:
+            # total_usd below stays the ceiling; this records what is expected inside the quota.
+            payload["expected"] = {
+                "usd": 0.0,
+                "basis": DOTNET_EXPECTED_BASIS,
+                "caveat": DOTNET_EXPECTED_CAVEAT,
+            }
     subtotals = [i["subtotal_usd"] for i in items if i["subtotal_usd"] is not None]
     payload["total_usd"] = round(sum(subtotals), 2) if subtotals else None
     json_path = ESTIMATES_DIR / f"{stamp}-{target}.json"
@@ -432,7 +549,12 @@ def cmd_target(args: argparse.Namespace) -> int:
         validate_target_args(args)
         # For base, resolve the deployment configuration into CloudFormation parameters before any
         # price is fetched, so an invalid configuration fails (exit 2) without a billed lookup.
-        parameters = build_base_parameters(args) if args.target == "base" else None
+        # atx records its transformation and agent-minute limit the same way.
+        parameters = None
+        if args.target == "base":
+            parameters = build_base_parameters(args)
+        elif args.target == "atx":
+            parameters = build_atx_parameters(args)
     except InputError as exc:
         print(f"estimate: {exc}", file=sys.stderr)
         return 2
@@ -472,7 +594,14 @@ def cmd_target(args: argparse.Namespace) -> int:
             }
             exit_code = 4
 
-    items = build_line_items(prices, args.target, hours, args.egress_mode)
+    items = build_line_items(
+        prices,
+        args.target,
+        hours,
+        args.egress_mode,
+        transformation=args.transformation,
+        limit_minutes=int(args.limit_minutes) if args.limit_minutes else None,
+    )
     path = write_estimate(
         args.target, hours, args.egress_mode, items, minimum_mismatch, parameters
     )
@@ -521,6 +650,13 @@ def build_parser() -> argparse.ArgumentParser:
     base.add_argument("--existing-directory-dns-ips")
     base.add_argument("--route-table-ids")
     base.add_argument("--name-prefix")
+
+    # --target atx run configuration. Both are required for atx and refused for other targets.
+    # --limit-minutes is parsed as a string and validated in validate_target_args, so a bad value
+    # takes the same exit-2 path as every other invalid input.
+    atx = parser.add_argument_group("atx run configuration (--target atx)")
+    atx.add_argument("--transformation")
+    atx.add_argument("--limit-minutes")
 
     parser.add_argument(
         "--price-fixture", help="JSON of unit prices (tests only; no live call)"
