@@ -6,5 +6,6 @@
   "ec2_t3_medium_hour": 0.0544,
   "ebs_gp3_gb_month": 0.096,
   "vpce_interface_az_hour": 0.014,
-  "secrets_manager_secret_month": 0.40
+  "secrets_manager_secret_month": 0.40,
+  "transform_agent_minute": 0.035
 }

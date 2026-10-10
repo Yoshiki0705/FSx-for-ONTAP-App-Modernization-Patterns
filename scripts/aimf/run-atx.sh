@@ -1,44 +1,77 @@
 #!/usr/bin/env bash
 #
-# The one sanctioned entry to AWS Transform custom (`atx`). A human runs this in task 4.2.3; the
-# agent is given only the result, and block_direct_atx.py stops the agent from running atx directly.
+# The one sanctioned entry to AWS Transform custom (`atx`). A human runs this; the agent is given
+# only the result, and block_direct_atx.py stops the agent from running atx directly.
 #
 #   run-atx.sh --estimate <file> --approved-at <ISO 8601>
 #
-# It performs the SAME entry check as deploy.sh (shared via scripts/lib/entry-check.sh) with
-# target=atx, then:
-#   - refuses the real run (exit 2) until the atx invocation has been verified (U8-U11, below);
-#   - scans the directory it sends with gitleaks using scripts/aimf/gitleaks-send.toml (which does
-#     NOT allow-list .private/, unlike the repo .gitleaks.toml), failing on any finding;
+# Exit codes: 0 atx finished; 1 atx failed (estimate kept for a retry) or the run log/region check
+# failed after a finished run; 2 refused before anything was sent; 3 atx stopped at the agent-minute
+# limit (minutes were billed, so the estimate is consumed).
+#
+# What runs is decided by the approved estimate alone. estimate.py --target atx records two
+# parameters (ParameterKey/ParameterValue pairs, the same shape the base estimate uses):
+# Transformation and LimitMinutes. This script reads them from the estimate and from nowhere else,
+# so there is no flag or environment variable that changes the transformation or raises the cap.
+# An atx estimate without either, with a LimitMinutes that is not a positive integer, or naming a
+# transformation outside the allow-list below is refused (exit 2). estimate.py's ATX_TRANSFORMATIONS
+# holds the same two names; dryrun_shell_tests.sh fails when they differ.
+#
+#   Transformation                       Invocation (run inside the send directory)
+#   AWS/comprehensive-codebase-analysis  atx custom def exec -n <name> -p . -x -t --limit <N>
+#   AWS/dotnet-modernization             atx custom def exec -n <name> -p . -x -t --limit <N>
+#
+# Sources: the Command Reference and Getting Started pages of the AWS Transform custom user guide
+# give the non-interactive form `-n <name> -p <path> -x -t`; `atx custom def exec --help` (atx
+# 3.18.0, 2026-10-10) lists `--limit <minutes>`, an agent-minute budget at which atx exits 2 and can
+# be resumed with a higher limit. The .NET page (dotnet-work-with-agent.html) gives
+# `atx custom def exec -n AWS/dotnet-modernization -p <path-to-solution> [-q] [-x] [-t]` with no
+# build command (-c) or configuration (-g); its default target is net10.0. The pricing page
+# (https://aws.amazon.com/transform/pricing/) says an interrupted transformation can be resumed up
+# to 24 hours later. On 2026-10-10 `atx custom def list --json` listed both names in ap-northeast-1.
+#
+# Per-invocation verification gate: a real run proceeds only when the verification record for THIS
+# transformation names this exact invocation, including `--limit <N>`:
+#   .private/runs/atx-invocation-verified-comprehensive-codebase-analysis.json
+#   .private/runs/atx-invocation-verified-dotnet-modernization.json
+# (APPMOD_ATX_VERIFIED_RECORD overrides the path, for tests). The record's invocation,
+# transformation, limit_minutes and region must match, and atx_version and verified_at must be set.
+# A different limit therefore needs a new record as well as a new estimate and approval.
+#
+# Send directories. comprehensive-codebase-analysis produces reports and does not modify code, so it
+# runs on .private/aimf/DocIntake (a git repository with no commits; nothing is committed inside it).
+# dotnet-modernization rewrites the code in place, so it never runs there: it runs on
+# .private/aimf/DocIntake-atx-dotnet, a separate copy made from a committed state of app/legacy.
+# For dotnet-modernization this script refuses (exit 2, before the scan and atx) a send directory
+# that is not the top of its own git work tree, has no commits, has uncommitted or untracked
+# changes, or resolves to the same physical path as the analysis directory. The HEAD sent is
+# written to the run log as send_head. APPMOD_SEND_DIR and APPMOD_ANALYSIS_SEND_DIR override the
+# two paths, for tests. The dotnet copy is created once, from the repository root:
+#   mkdir -p .private/aimf/DocIntake-atx-dotnet
+#   git archive --format=tar HEAD:app/legacy | tar -x -C .private/aimf/DocIntake-atx-dotnet
+#   git -C .private/aimf/DocIntake-atx-dotnet init -q
+#   git -C .private/aimf/DocIntake-atx-dotnet add -A
+#   git -C .private/aimf/DocIntake-atx-dotnet -c user.name=appmod \
+#     -c user.email=appmod@example.com commit -q -m "init: DocIntake sample from Spoke app/legacy"
+#
+# Before calling atx it performs the SAME entry check as deploy.sh (scripts/lib/entry-check.sh)
+# with target=atx, then:
+#   - scans the send directory with gitleaks using scripts/aimf/gitleaks-send.toml (which does NOT
+#     allow-list .private/, unlike the repo .gitleaks.toml), failing on any finding;
 #   - sets AWS_REGION=ap-northeast-1 (and unsets ATX_CUSTOM_ENDPOINT, which would override it),
 #     records that value as aws_region_env, and records regionSource as atx itself logged it;
-#   - fails when atx fails (its exit status is read from PIPESTATUS, not from tee), and moves the
-#     estimate to estimates/used/ only after a successful run, before anything else that could
-#     fail afterwards (log write, regionSource capture, region check).
-#
-# The invocation is assembled from the public AWS Transform custom user guide: the non-interactive
-# form `atx custom def exec -n <name> -p <path> -x -t` (Getting Started; Command Reference) and the
-# managed transformation name AWS/comprehensive-codebase-analysis (Managed Transformations). Re-read
-# on 2026-10-07: the Command Reference lists -n, -p, -x and -t and does not mark -c required, the
-# March 2026 GA notice gives `atx custom def exec -n AWS/comprehensive-codebase-analysis -p` as the
-# way to start, and Getting Started lists ap-northeast-1 among the service's Regions (U8, U11
-# documented). Running that form for this transformation, without a build command (-c), has not been
-# done: whether the Tokyo registry lists it (U8), whether $0.035 per agent minute applies to it (U9),
-# and reachability and IAM (U10) stay open until task 2.4. Until then the real path fails closed. Task 2.4 writes the
-# verification record (.private/runs/atx-invocation-verified.json) after confirming, with atx
-# installed, `atx --version`, `atx custom def list --json` listing the transformation, and
-# `atx custom def exec --help` accepting these flags. The record must name this exact invocation.
+#   - reads atx's exit status from PIPESTATUS, not from tee. On 0 the estimate moves to
+#     estimates/used/ before anything else that could fail. On 2 (limit reached) the minutes were
+#     billed, so the estimate is consumed the same way and the script exits 3. Any other failure
+#     keeps the estimate and exits 1.
 #
 # regionSource: the user guide shows atx writing a DEBUG line "Initializing FrontendServiceClient
-# with config" carrying "region" and "regionSource", and puts developer debug logs under
-# ~/.aws/atx/logs/. This script reads regionSource from atx's own output and from the debug logs
-# written during the run; it never derives regionSource from AWS_REGION. Whether the debug log is
-# written without an extra flag is unverified, so when no regionSource is found the record says
-# "unverified".
+# with config" carrying "region" and "regionSource", under ~/.aws/atx/logs/. This script reads
+# regionSource from atx's own output and from the debug logs written during the run; it never
+# derives regionSource from AWS_REGION. When none is found the record says "unverified".
 #
-# The directory sent is .private/aimf/DocIntake/ (the AWS Transform custom requirement is a git
-# repository of the self-written sample only). When APPMOD_DRY_RUN is set, the gitleaks scan, the
-# atx call and the move are printed instead of run, and the verification gate only reports.
+# When APPMOD_DRY_RUN is set, the gitleaks scan, the atx call and the move are printed instead of
+# run, and the verification gate only reports. The send-directory check is read-only and runs.
 #
 set -euo pipefail
 
@@ -50,15 +83,11 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 REGION="ap-northeast-1"
 DRY_RUN="${APPMOD_DRY_RUN:-}"
 ESTIMATES_DIR="${APPMOD_ESTIMATES_DIR:-.private/estimates}"
-SEND_DIR="${APPMOD_SEND_DIR:-.private/aimf/DocIntake}"
+ANALYSIS_SEND_DIR="${APPMOD_ANALYSIS_SEND_DIR:-.private/aimf/DocIntake}"
+DOTNET_SEND_DIR=".private/aimf/DocIntake-atx-dotnet"
 SEND_CONFIG="$REPO_ROOT/scripts/aimf/gitleaks-send.toml"
 RUN_LOG="${APPMOD_RUN_LOG:-.private/runs/atx-run.log}"
-VERIFIED_RECORD="${APPMOD_ATX_VERIFIED_RECORD:-.private/runs/atx-invocation-verified.json}"
 ATX_LOG_DIR="${APPMOD_ATX_LOG_DIR:-$HOME/.aws/atx/logs}"
-
-ATX_TRANSFORMATION="AWS/comprehensive-codebase-analysis"
-ATX_ARGS=(custom def exec -n "$ATX_TRANSFORMATION" -p . -x -t)
-ATX_INVOCATION="atx ${ATX_ARGS[*]}"
 
 ESTIMATE=""
 APPROVED_AT=""
@@ -79,18 +108,82 @@ if ! appmod_entry_check "$ESTIMATE" "$APPROVED_AT" "atx"; then
   exit 2
 fi
 
-# The verification gate. Passes only when the record exists and names this exact invocation, this
-# transformation and ap-northeast-1, with an atx version and a verification time.
+# Print Transformation and LimitMinutes from the estimate's parameters, one per line. Exits 2 with
+# a message when the estimate has no parameters list or either key is missing.
+read_atx_parameters() {
+  APPMOD_EST="$ESTIMATE" python3 -c 'import json,os,sys
+def fail(msg):
+    print("run-atx: " + msg, file=sys.stderr)
+    sys.exit(2)
+try:
+    est = json.load(open(os.environ["APPMOD_EST"], encoding="utf-8"))
+except (OSError, ValueError) as exc:
+    fail(f"estimate is not readable JSON: {exc}")
+params = est.get("parameters")
+if not isinstance(params, list):
+    fail("the atx estimate has no parameters list; re-estimate with estimate.py --target atx "
+         "--transformation <name> --limit-minutes <N>")
+pairs = {p.get("ParameterKey"): p.get("ParameterValue") for p in params if isinstance(p, dict)}
+for key in ("Transformation", "LimitMinutes"):
+    if not isinstance(pairs.get(key), str) or not pairs[key]:
+        fail(f"the atx estimate parameters have no {key}; re-estimate with estimate.py --target atx")
+print(pairs["Transformation"])
+print(pairs["LimitMinutes"])'
+}
+
+if ! ATX_PARAMS="$(read_atx_parameters)"; then
+  echo "run-atx: not sending" >&2
+  exit 2
+fi
+ATX_TRANSFORMATION="${ATX_PARAMS%%$'\n'*}"
+ATX_LIMIT="${ATX_PARAMS#*$'\n'}"
+
+# The allow-list (same two names as estimate.py ATX_TRANSFORMATIONS).
+case "$ATX_TRANSFORMATION" in
+  AWS/comprehensive-codebase-analysis)
+    ATX_SLUG="comprehensive-codebase-analysis"
+    SEND_DIR="${APPMOD_SEND_DIR:-$ANALYSIS_SEND_DIR}"
+    REQUIRE_COMMITTED=""
+    ;;
+  AWS/dotnet-modernization)
+    ATX_SLUG="dotnet-modernization"
+    SEND_DIR="${APPMOD_SEND_DIR:-$DOTNET_SEND_DIR}"
+    REQUIRE_COMMITTED=1
+    ;;
+  *)
+    echo "run-atx: transformation '$ATX_TRANSFORMATION' is not in the allow-list" \
+      "(AWS/comprehensive-codebase-analysis, AWS/dotnet-modernization); not sending" >&2
+    exit 2
+    ;;
+esac
+case "$ATX_LIMIT" in
+  ''|*[!0-9]*|0*)
+    echo "run-atx: LimitMinutes '$ATX_LIMIT' is not a positive integer; not sending" >&2
+    exit 2
+    ;;
+esac
+
+VERIFIED_RECORD="${APPMOD_ATX_VERIFIED_RECORD:-.private/runs/atx-invocation-verified-$ATX_SLUG.json}"
+ATX_ARGS=(custom def exec -n "$ATX_TRANSFORMATION" -p . -x -t --limit "$ATX_LIMIT")
+ATX_INVOCATION="atx ${ATX_ARGS[*]}"
+echo "run-atx: transformation=$ATX_TRANSFORMATION limit_minutes=$ATX_LIMIT (from the estimate)"
+
+# The per-invocation verification gate. Passes only when the record names this exact invocation
+# (including --limit), this transformation, this limit and ap-northeast-1, with an atx version and a
+# verification time.
 invocation_verified() {
   [ -f "$VERIFIED_RECORD" ] || return 1
   APPMOD_REC="$VERIFIED_RECORD" APPMOD_INV="$ATX_INVOCATION" APPMOD_TX="$ATX_TRANSFORMATION" \
-  APPMOD_REGION="$REGION" python3 -c 'import json,os,sys
+  APPMOD_LIMIT="$ATX_LIMIT" APPMOD_REGION="$REGION" python3 -c 'import json,os,sys
 try:
     r = json.load(open(os.environ["APPMOD_REC"], encoding="utf-8"))
 except (OSError, ValueError):
     sys.exit(1)
+lim = r.get("limit_minutes")
 ok = (r.get("invocation") == os.environ["APPMOD_INV"]
       and r.get("transformation") == os.environ["APPMOD_TX"]
+      and isinstance(lim, int) and not isinstance(lim, bool)
+      and str(lim) == os.environ["APPMOD_LIMIT"]
       and r.get("region") == os.environ["APPMOD_REGION"]
       and r.get("atx_version") and r.get("verified_at"))
 sys.exit(0 if ok else 1)'
@@ -99,12 +192,73 @@ sys.exit(0 if ok else 1)'
 if invocation_verified; then
   echo "run-atx: atx invocation verified by $VERIFIED_RECORD: $ATX_INVOCATION"
 elif [ -n "$DRY_RUN" ]; then
-  echo "run-atx: atx invocation NOT verified (U8-U11); a real run would exit 2 here"
+  echo "run-atx: atx invocation NOT verified for $ATX_TRANSFORMATION; a real run would exit 2 here"
 else
-  echo "run-atx: the atx invocation is unverified (U8-U11): no verification record at $VERIFIED_RECORD" >&2
-  echo "run-atx: '$ATX_INVOCATION' is assembled from the public user guide but has not been run;" >&2
-  echo "run-atx: task 2.4 confirms it and writes the record. Not sending." >&2
+  echo "run-atx: no verification record for '$ATX_INVOCATION' at $VERIFIED_RECORD" >&2
+  echo "run-atx: the record must name this transformation, limit_minutes $ATX_LIMIT and this exact" >&2
+  echo "run-atx: invocation (a different limit needs a new record). Not sending." >&2
   exit 2
+fi
+
+# Physical path of a directory, or empty when it cannot be entered.
+physical_dir() { (cd "$1" 2>/dev/null && pwd -P) || true; }
+
+# HEAD of the send directory when it is the top of its own git work tree, else a "none (...)" note.
+send_head_of() {
+  local dir="$1" top head
+  top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -z "$top" ] || [ "$(physical_dir "$top")" != "$(physical_dir "$dir")" ]; then
+    echo "none (not a git work tree)"
+  elif head="$(git -C "$dir" rev-parse --verify -q HEAD 2>/dev/null)"; then
+    echo "$head"
+  else
+    echo "none (no commits)"
+  fi
+}
+
+# dotnet-modernization rewrites files, so it only runs on its own clean, committed copy.
+check_send_dir() {
+  local dir="$1" phys analysis_phys head status
+  phys="$(physical_dir "$dir")"
+  if [ -z "$phys" ]; then
+    echo "run-atx: send directory $dir does not exist; not sending" >&2
+    return 2
+  fi
+  [ -n "$REQUIRE_COMMITTED" ] || return 0
+  analysis_phys="$(physical_dir "$ANALYSIS_SEND_DIR")"
+  if [ -n "$analysis_phys" ] && [ "$phys" = "$analysis_phys" ]; then
+    echo "run-atx: $ATX_TRANSFORMATION changes code and must not run on the analysis copy" \
+      "($ANALYSIS_SEND_DIR); use $DOTNET_SEND_DIR. Not sending." >&2
+    return 2
+  fi
+  head="$(send_head_of "$dir")"
+  case "$head" in
+    none*)
+      echo "run-atx: $ATX_TRANSFORMATION needs a send directory with commits; $dir: $head." \
+        "Not sending." >&2
+      return 2
+      ;;
+  esac
+  if ! status="$(git -C "$dir" status --porcelain 2>/dev/null)"; then
+    echo "run-atx: git status failed in $dir; not sending" >&2
+    return 2
+  fi
+  if [ -n "$status" ]; then
+    echo "run-atx: $dir has uncommitted or untracked changes; commit or discard them first." \
+      "Not sending." >&2
+    return 2
+  fi
+  return 0
+}
+
+if ! check_send_dir "$SEND_DIR"; then
+  exit 2
+fi
+SEND_HEAD="$(send_head_of "$SEND_DIR")"
+if [ -n "$REQUIRE_COMMITTED" ]; then
+  echo "run-atx: send directory $SEND_DIR is a clean git work tree at $SEND_HEAD"
+else
+  echo "run-atx: send directory $SEND_DIR (send_head=$SEND_HEAD)"
 fi
 
 # Send-scan with the send config, which has no .private/ allow-list, so a key placed anywhere is
@@ -153,17 +307,25 @@ print("regionSource=unverified (no regionSource line in atx output or its debug 
 PY
 }
 
+LIMIT_MESSAGE="limit reached, resumable for 24 h, needs a new estimate to raise the limit"
+
 echo "run-atx: AWS_REGION=$AWS_REGION; recording aws_region_env and regionSource to $RUN_LOG"
 if [ -n "$DRY_RUN" ]; then
   echo "DRY-RUN: (cd $SEND_DIR && $ATX_INVOCATION) with AWS_REGION=$AWS_REGION, output tee'd to $RUN_LOG"
   echo "DRY-RUN: regionSource read from atx output and from $ATX_LOG_DIR (files newer than the run start)"
-  echo "DRY-RUN: mv $ESTIMATE $ESTIMATES_DIR/used/   (only when atx exits 0)"
+  echo "DRY-RUN: mv $ESTIMATE $ESTIMATES_DIR/used/   (when atx exits 0, or 2 = $LIMIT_MESSAGE -> exit 3)"
   echo "run-atx: dry-run done"
   exit 0
 fi
 
-echo "aws_region_env=$AWS_REGION at $(stamp)" >>"$RUN_LOG"
-echo "invocation=$ATX_INVOCATION" >>"$RUN_LOG"
+{
+  echo "aws_region_env=$AWS_REGION at $(stamp)"
+  echo "transformation=$ATX_TRANSFORMATION"
+  echo "limit_minutes=$ATX_LIMIT"
+  echo "send_dir=$SEND_DIR"
+  echo "send_head=$SEND_HEAD"
+  echo "invocation=$ATX_INVOCATION"
+} >>"$RUN_LOG"
 ATX_OUT="$(mktemp)"
 MARKER="$(mktemp)"
 trap 'rm -f "$ATX_OUT" "$MARKER"' EXIT
@@ -187,6 +349,20 @@ region_of_run() {
   [ -n "$line" ] || line="regionSource=unverified (capture printed nothing)"
   printf '%s\n' "$line"
 }
+
+if [ "$atx_rc" -eq 2 ]; then
+  # atx stopped at --limit: the minutes up to the limit were billed, so consume the estimate FIRST
+  # (as on success), then report. Raising the limit needs a new estimate, approval and record.
+  mkdir -p "$ESTIMATES_DIR/used"
+  mv "$ESTIMATE" "$ESTIMATES_DIR/used/"
+  echo "run-atx: estimate moved to used/ (the limit was reached, so the minutes were billed)"
+  echo "atx exit=2 at $(stamp): $LIMIT_MESSAGE (limit_minutes=$ATX_LIMIT)" >>"$RUN_LOG"
+  region_line="$(region_of_run)"
+  echo "$region_line" >>"$RUN_LOG"
+  echo "$region_line"
+  echo "run-atx: atx exit=2: $LIMIT_MESSAGE (limit_minutes=$ATX_LIMIT)" >&2
+  exit 3
+fi
 
 if [ "$atx_rc" -ne 0 ]; then
   region_line="$(region_of_run)"

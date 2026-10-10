@@ -2,7 +2,11 @@
 #
 # Dry-run tests for the AWS- and ONTAP-calling shell scripts. Every case runs with APPMOD_DRY_RUN=1
 # (and fixtures for ONTAP), so NO AWS, ONTAP or network call is made. Covers the design test plan:
-# deploy.sh's six entry-check cases, run-atx.sh's same entry check, block_direct_atx.py's two cases,
+# deploy.sh's six entry-check cases, run-atx.sh's same entry check plus its estimate-parameter
+# refusals (no parameters, no LimitMinutes, limit 0, transformation outside the allow-list), the
+# allow-list parity with estimate.py, and its PATH-mocked real-mode cases (unverified, atx failure,
+# success, no debug log, per-transformation and per-limit record mismatch, exit 2 at the limit,
+# commit-less / dirty / analysis-copy dotnet send dirs, dotnet success), block_direct_atx.py's two cases,
 # check-no-locking.sh's locked / missing-appdata / absent-field cases, integration-clone.sh's rejections, and that
 # the happy paths reach their dry-run action.
 #
@@ -229,17 +233,62 @@ else
 fi
 
 # --- run-atx.sh: same entry check with target=atx -------------------------------------------------
+# The atx estimate records Transformation and LimitMinutes as estimate.py --target atx writes them;
+# run-atx.sh reads both from here and from nowhere else.
+atx_params_json() {  # atx_params_json <transformation> <limit>
+  printf '[{"ParameterKey":"Transformation","ParameterValue":"%s"},{"ParameterKey":"LimitMinutes","ParameterValue":"%s"}]' "$1" "$2"
+}
 EST_ATX="$EST_DIR/case-atx.json"
 cat >"$EST_ATX" <<EOF
-{"target": "atx", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 1}
+{"target": "atx", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 0, "parameters": $(atx_params_json AWS/comprehensive-codebase-analysis 120)}
 EOF
 export APPMOD_SEND_DIR="$TMP/senddir"
 mkdir -p "$APPMOD_SEND_DIR"
 expect_exit 0 "run-atx.sh valid estimate (dry-run)" \
   bash scripts/aimf/run-atx.sh --estimate "$EST_ATX" --approved-at "$APPROVED"
+ATX_DRY_OUT="$(bash scripts/aimf/run-atx.sh --estimate "$EST_ATX" --approved-at "$APPROVED" 2>&1)"
+check_contains "run-atx.sh dry-run passes the estimate's limit to atx --limit" \
+  "atx custom def exec -n AWS/comprehensive-codebase-analysis -p . -x -t --limit 120" "$ATX_DRY_OUT"
 expect_exit 2 "run-atx.sh wrong target estimate" \
   bash scripts/aimf/run-atx.sh --estimate "$EST_BASE" --approved-at "$APPROVED"
+# Each estimate below passes the entry check (fresh, approved, in-region, target atx) and fails only
+# on its parameters, so the exit 2 can come from nothing else.
+atx_dry_refused() {  # atx_dry_refused <name> <label> <parameters-json-or-empty>
+  local path="$EST_DIR/$1.json" params_field=""
+  [ -n "$3" ] && params_field=", \"parameters\": $3"
+  printf '{"target": "atx", "region": "ap-northeast-1", "created_at": "%s", "hours": 0%s}\n' \
+    "$CREATED" "$params_field" >"$path"
+  python3 - "$APPROVAL" "$path" "$APPROVED" <<'PY'
+import json,sys
+p,est,approved=sys.argv[1:4]
+d=json.load(open(p)); d.append({"target":"atx","approved_at":approved,"estimate_file":est}); json.dump(d,open(p,"w"))
+PY
+  expect_exit 2 "$2" bash scripts/aimf/run-atx.sh --estimate "$path" --approved-at "$APPROVED"
+}
+atx_dry_refused atx-noparams "run-atx.sh refuses an atx estimate without parameters" ""
+atx_dry_refused atx-nolimit "run-atx.sh refuses an atx estimate without LimitMinutes" \
+  '[{"ParameterKey":"Transformation","ParameterValue":"AWS/comprehensive-codebase-analysis"}]'
+atx_dry_refused atx-limit0 "run-atx.sh refuses LimitMinutes 0" \
+  "$(atx_params_json AWS/comprehensive-codebase-analysis 0)"
+atx_dry_refused atx-unknown-tx "run-atx.sh refuses a transformation outside the allow-list" \
+  "$(atx_params_json AWS/java-version-upgrade 120)"
 unset APPMOD_SEND_DIR
+# The allow-list is held in two places (estimate.py ATX_TRANSFORMATIONS and the case in run-atx.sh);
+# both must name exactly the same transformations.
+if python3 - <<'PY'
+import importlib.util, re, sys
+spec = importlib.util.spec_from_file_location("estimate", "scripts/estimate.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+text = open("scripts/aimf/run-atx.sh", encoding="utf-8").read()
+in_case = set(re.findall(r"^\s+(AWS/[A-Za-z0-9-]+)\)\s*$", text, re.M))
+sys.exit(0 if in_case == set(m.ATX_TRANSFORMATIONS) else 1)
+PY
+then
+  echo "ok: run-atx.sh allow-list matches estimate.py ATX_TRANSFORMATIONS"
+else
+  echo "FAIL: run-atx.sh allow-list differs from estimate.py ATX_TRANSFORMATIONS" >&2
+  FAILURES=$((FAILURES + 1))
+fi
 
 # --- block_direct_atx.py: two cases ---------------------------------------------------------------
 if echo '{"command": "atx run --project DocIntake"}' | python3 scripts/aimf/block_direct_atx.py >/dev/null 2>&1; then
@@ -736,9 +785,10 @@ fi
 
 # --- run-atx.sh: real mode fails closed while unverified; a failed atx does not consume the estimate
 ATX_SEND="$TMP/atx-send"; mkdir -p "$ATX_SEND" "$TMP/atx-logs"
-new_atx_estimate() {
+new_atx_estimate() {  # new_atx_estimate <name> [transformation] [limit]
   local path="$EST_DIR/$1.json"
-  printf '{"target": "atx", "region": "ap-northeast-1", "created_at": "%s", "hours": 1}\n' "$CREATED" >"$path"
+  printf '{"target": "atx", "region": "ap-northeast-1", "created_at": "%s", "hours": 0, "parameters": %s}\n' \
+    "$CREATED" "$(atx_params_json "${2:-AWS/comprehensive-codebase-analysis}" "${3:-120}")" >"$path"
   python3 - "$APPROVAL" "$path" "$APPROVED" <<'PY'
 import json,sys
 p,est,approved=sys.argv[1:4]
@@ -766,7 +816,7 @@ EST_U="$(new_atx_estimate atx-unverified)"
 rm -f "$MOCK_ATX_ARGV"
 U_OUT="$("${ATX_ENV[@]}" APPMOD_ATX_VERIFIED_RECORD="$TMP/none.json" \
   bash scripts/aimf/run-atx.sh --estimate "$EST_U" --approved-at "$APPROVED" 2>&1)"; U_RC=$?
-if [ "$U_RC" -eq 2 ] && printf '%s' "$U_OUT" | grep -q "unverified (U8-U11)" \
+if [ "$U_RC" -eq 2 ] && printf '%s' "$U_OUT" | grep -q "no verification record for" \
   && [ ! -f "$MOCK_ATX_ARGV" ] && [ -f "$EST_U" ]; then
   echo "ok: run-atx real mode fails closed (exit 2) while the invocation is unverified"
 else
@@ -774,12 +824,12 @@ else
   echo "$U_OUT" >&2
   FAILURES=$((FAILURES + 1))
 fi
-# A verification record naming the exact invocation (what task 2.4 writes).
+# A verification record naming the exact invocation, limit included (what task 2.4 writes).
 VREC="$TMP/atx-verified.json"
 cat >"$VREC" <<'EOF'
-{"invocation": "atx custom def exec -n AWS/comprehensive-codebase-analysis -p . -x -t",
- "transformation": "AWS/comprehensive-codebase-analysis", "region": "ap-northeast-1",
- "atx_version": "mock", "verified_at": "2026-01-01T00:00:00Z"}
+{"invocation": "atx custom def exec -n AWS/comprehensive-codebase-analysis -p . -x -t --limit 120",
+ "transformation": "AWS/comprehensive-codebase-analysis", "limit_minutes": 120,
+ "region": "ap-northeast-1", "atx_version": "mock", "verified_at": "2026-01-01T00:00:00Z"}
 EOF
 # (2) atx fails -> script fails, estimate NOT moved to used/
 EST_F="$(new_atx_estimate atx-fails)"
@@ -788,7 +838,7 @@ rm -f "$MOCK_ATX_ARGV"
   bash scripts/aimf/run-atx.sh --estimate "$EST_F" --approved-at "$APPROVED" >/dev/null 2>&1
 F_RC=$?
 if [ "$F_RC" -ne 0 ] && [ -f "$EST_F" ] && [ ! -f "$EST_DIR/used/atx-fails.json" ] \
-  && [ "$(cat "$MOCK_ATX_ARGV" 2>/dev/null)" = "custom def exec -n AWS/comprehensive-codebase-analysis -p . -x -t" ] \
+  && [ "$(cat "$MOCK_ATX_ARGV" 2>/dev/null)" = "custom def exec -n AWS/comprehensive-codebase-analysis -p . -x -t --limit 120" ] \
   && grep -q "atx exit=7" "$TMP/atx-run.log"; then
   echo "ok: run-atx fails when atx fails, and the estimate stays out of used/"
 else
@@ -826,6 +876,117 @@ if [ "$N_RC" -eq 0 ] && [ -f "$EST_DIR/used/atx-no-debug-log.json" ] && [ ! -f "
 else
   echo "FAIL: run-atx success without a debug log (rc=$N_RC) should exit 0, move the estimate, record unverified" >&2
   cat "$TMP/atx-run-nolog.log" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+# --- run-atx.sh: per-invocation record, exit 2 at the limit, and the dotnet send-dir gate ---------
+# Temp repositories commit with hooks off and a placeholder identity, so neither the global
+# pre-commit hook nor a real identity is involved.
+tgit() {
+  git -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=test \
+    -c user.email=test@example.com "$@"
+}
+make_committed_copy() {  # make_committed_copy <dir>: a clean git work tree with one commit
+  mkdir -p "$1" && printf 'class A {}\n' >"$1/A.cs" \
+    && tgit -C "$1" init -q && tgit -C "$1" add -A && tgit -C "$1" commit -q -m init
+}
+# atx_real_refused <label> <estimate> <message> [VAR=value ...]: exit 2, atx never called, estimate
+# kept, and the refusal message is the expected one (so the exit 2 comes from that gate).
+atx_real_refused() {
+  local label="$1" est="$2" needle="$3" out rc; shift 3
+  rm -f "$MOCK_ATX_ARGV"
+  out="$("${ATX_ENV[@]}" "$@" bash scripts/aimf/run-atx.sh --estimate "$est" \
+    --approved-at "$APPROVED" 2>&1)"; rc=$?
+  if [ "$rc" -eq 2 ] && [ ! -f "$MOCK_ATX_ARGV" ] && [ -f "$est" ] \
+    && printf '%s' "$out" | grep -qF -- "$needle"; then
+    echo "ok: $label"
+  else
+    echo "FAIL: $label (rc=$rc, atx called: $([ -f "$MOCK_ATX_ARGV" ] && echo yes || echo no))" >&2
+    printf '%s\n' "$out" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+DN_SEND="$TMP/atx-dotnet-send"
+make_committed_copy "$DN_SEND"
+DN_HEAD="$(git -C "$DN_SEND" rev-parse HEAD)"
+VREC_DN="$TMP/atx-verified-dotnet.json"
+cat >"$VREC_DN" <<'EOF'
+{"invocation": "atx custom def exec -n AWS/dotnet-modernization -p . -x -t --limit 300",
+ "transformation": "AWS/dotnet-modernization", "limit_minutes": 300,
+ "region": "ap-northeast-1", "atx_version": "mock", "verified_at": "2026-01-01T00:00:00Z"}
+EOF
+# (5) the analysis record does not verify a dotnet-modernization run (per-invocation gate)
+EST_X="$(new_atx_estimate atx-record-mismatch AWS/dotnet-modernization 300)"
+atx_real_refused "run-atx refuses a dotnet run against the analysis record (per-transformation)" \
+  "$EST_X" "no verification record for" APPMOD_ATX_VERIFIED_RECORD="$VREC" APPMOD_SEND_DIR="$DN_SEND"
+# (6) a record for --limit 60 does not verify an estimate for 120
+VREC60="$TMP/atx-verified-60.json"
+cat >"$VREC60" <<'EOF'
+{"invocation": "atx custom def exec -n AWS/comprehensive-codebase-analysis -p . -x -t --limit 60",
+ "transformation": "AWS/comprehensive-codebase-analysis", "limit_minutes": 60,
+ "region": "ap-northeast-1", "atx_version": "mock", "verified_at": "2026-01-01T00:00:00Z"}
+EOF
+EST_L="$(new_atx_estimate atx-limit-mismatch)"
+atx_real_refused "run-atx refuses a record whose limit differs from the estimate" \
+  "$EST_L" "limit_minutes 120" APPMOD_ATX_VERIFIED_RECORD="$VREC60"
+# (7) atx exits 2 at the limit -> exit 3, the estimate is consumed, the run log says so
+EST_R="$(new_atx_estimate atx-limit-reached)"
+: >"$TMP/atx-run-limit.log"
+R_OUT="$("${ATX_ENV[@]}" APPMOD_RUN_LOG="$TMP/atx-run-limit.log" APPMOD_ATX_VERIFIED_RECORD="$VREC" \
+  MOCK_ATX_RC=2 bash scripts/aimf/run-atx.sh --estimate "$EST_R" --approved-at "$APPROVED" 2>&1)"
+R_RC=$?
+if [ "$R_RC" -eq 3 ] && [ -f "$EST_DIR/used/atx-limit-reached.json" ] && [ ! -f "$EST_R" ] \
+  && grep -qF "atx exit=2" "$TMP/atx-run-limit.log" \
+  && grep -qF "limit reached, resumable for 24 h, needs a new estimate to raise the limit" "$TMP/atx-run-limit.log" \
+  && grep -q "^regionSource=" "$TMP/atx-run-limit.log" \
+  && printf '%s' "$R_OUT" | grep -qF "limit reached"; then
+  echo "ok: run-atx handles atx exit 2 as limit reached (exit 3, estimate consumed, logged)"
+else
+  echo "FAIL: run-atx with atx exit 2 (rc=$R_RC) should exit 3, consume the estimate and log the limit" >&2
+  printf '%s\n' "$R_OUT" >&2; cat "$TMP/atx-run-limit.log" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+# (8) dotnet send dir that is a git repository with no commits
+DN_EMPTY="$TMP/atx-dotnet-nocommit"; mkdir -p "$DN_EMPTY"; printf 'x\n' >"$DN_EMPTY/A.cs"
+tgit -C "$DN_EMPTY" init -q
+EST_E="$(new_atx_estimate atx-dotnet-nocommit AWS/dotnet-modernization 300)"
+atx_real_refused "run-atx refuses a commit-less dotnet send dir" \
+  "$EST_E" "needs a send directory with commits" APPMOD_ATX_VERIFIED_RECORD="$VREC_DN" \
+  APPMOD_SEND_DIR="$DN_EMPTY"
+# (9) a committed dotnet send dir with an untracked file
+DN_DIRTY="$TMP/atx-dotnet-dirty"
+make_committed_copy "$DN_DIRTY"
+printf 'y\n' >"$DN_DIRTY/B.cs"
+EST_D="$(new_atx_estimate atx-dotnet-dirty AWS/dotnet-modernization 300)"
+atx_real_refused "run-atx refuses a dirty dotnet send dir" \
+  "$EST_D" "uncommitted or untracked changes" APPMOD_ATX_VERIFIED_RECORD="$VREC_DN" \
+  APPMOD_SEND_DIR="$DN_DIRTY"
+# (10) the dotnet send dir resolves to the analysis copy (via a symlink). The analysis copy is a
+# clean committed repository here, so only the same-path check can refuse it.
+AN_SEND="$TMP/atx-analysis-copy"
+make_committed_copy "$AN_SEND"
+ln -s "$AN_SEND" "$TMP/atx-analysis-link"
+EST_A="$(new_atx_estimate atx-dotnet-on-analysis AWS/dotnet-modernization 300)"
+atx_real_refused "run-atx refuses dotnet-modernization on the analysis copy" \
+  "$EST_A" "must not run on the analysis copy" APPMOD_ATX_VERIFIED_RECORD="$VREC_DN" \
+  APPMOD_ANALYSIS_SEND_DIR="$AN_SEND" APPMOD_SEND_DIR="$TMP/atx-analysis-link"
+# (11) clean committed dotnet send dir and its own record: atx runs with --limit 300, HEAD recorded
+EST_OK="$(new_atx_estimate atx-dotnet-ok AWS/dotnet-modernization 300)"
+: >"$TMP/atx-run-dotnet.log"
+rm -f "$MOCK_ATX_ARGV"
+"${ATX_ENV[@]}" APPMOD_RUN_LOG="$TMP/atx-run-dotnet.log" APPMOD_ATX_VERIFIED_RECORD="$VREC_DN" \
+  APPMOD_SEND_DIR="$DN_SEND" APPMOD_ANALYSIS_SEND_DIR="$AN_SEND" MOCK_ATX_RC=0 \
+  bash scripts/aimf/run-atx.sh --estimate "$EST_OK" --approved-at "$APPROVED" >/dev/null 2>&1
+OK_RC=$?
+if [ "$OK_RC" -eq 0 ] && [ -f "$EST_DIR/used/atx-dotnet-ok.json" ] \
+  && [ "$(cat "$MOCK_ATX_ARGV" 2>/dev/null)" = "custom def exec -n AWS/dotnet-modernization -p . -x -t --limit 300" ] \
+  && grep -qxF "send_head=$DN_HEAD" "$TMP/atx-run-dotnet.log" \
+  && grep -qxF "limit_minutes=300" "$TMP/atx-run-dotnet.log" \
+  && grep -qxF "transformation=AWS/dotnet-modernization" "$TMP/atx-run-dotnet.log"; then
+  echo "ok: run-atx runs dotnet-modernization on a clean committed copy with --limit 300 and records HEAD"
+else
+  echo "FAIL: run-atx dotnet on a clean committed copy (rc=$OK_RC) should run with --limit 300 and log send_head" >&2
+  echo "argv: $(cat "$MOCK_ATX_ARGV" 2>/dev/null)" >&2; cat "$TMP/atx-run-dotnet.log" >&2
   FAILURES=$((FAILURES + 1))
 fi
 

@@ -3,7 +3,10 @@
 
 Covers the design's test-plan rows for estimate.py: the arithmetic from a price fixture, input
 validation exit codes, the --elapsed 79% / 81% / no-record cases including "atx after base does not
-move the origin", and the --target base minimum recheck (exit 4 on mismatch, exit 0 on match).
+move the origin", the --target base minimum recheck (exit 4 on mismatch, exit 0 on match), and
+--target atx: --transformation / --limit-minutes required and allow-listed (exit 2 otherwise),
+refused on other targets, recorded as parameters, and priced as the ceiling N x unit price, with
+an expected $0 inside the AWS/dotnet-modernization quota.
 """
 
 from __future__ import annotations
@@ -184,6 +187,118 @@ class BaseParameterTests(unittest.TestCase):
         self.assertEqual(pairs["CreateDirectory"], "false")
         self.assertEqual(pairs["ExistingDirectoryId"], "d-0123456789")
         self.assertEqual(pairs["ExistingDirectoryDnsIps"], "192.0.2.10,192.0.2.11")
+
+
+class AtxEstimateTests(unittest.TestCase):
+    """--target atx records the transformation and agent-minute limit, priced as a ceiling."""
+
+    def _run_atx(
+        self, extra: list[str], price_fixture: Path | None = FIXTURES / "prices.json"
+    ) -> tuple[int, dict | None]:
+        with tempfile.TemporaryDirectory() as d:
+            orig = estimate.ESTIMATES_DIR
+            estimate.ESTIMATES_DIR = Path(d) / "estimates"
+            argv = ["--target", "atx", *extra]
+            if price_fixture is not None:
+                argv += ["--price-fixture", str(price_fixture)]
+            try:
+                code = estimate.main(argv)
+                written = (
+                    sorted(estimate.ESTIMATES_DIR.glob("*.json")) if code == 0 else []
+                )
+                payload = (
+                    json.loads(written[0].read_text(encoding="utf-8"))
+                    if written
+                    else None
+                )
+            finally:
+                estimate.ESTIMATES_DIR = orig
+            return code, payload
+
+    ANALYSIS = ("--transformation", "AWS/comprehensive-codebase-analysis")
+    DOTNET = ("--transformation", "AWS/dotnet-modernization")
+
+    def test_without_limit_minutes_is_refused(self) -> None:
+        code, payload = self._run_atx(self.ANALYSIS)
+        self.assertEqual(code, 2)
+        self.assertIsNone(payload)
+
+    def test_without_transformation_is_refused(self) -> None:
+        self.assertEqual(self._run_atx(["--limit-minutes", "120"])[0], 2)
+
+    def test_unknown_transformation_is_refused(self) -> None:
+        code, _ = self._run_atx(
+            ["--transformation", "AWS/java-version-upgrade", "--limit-minutes", "120"]
+        )
+        self.assertEqual(code, 2)
+
+    def test_non_positive_or_non_integer_limit_is_refused(self) -> None:
+        for bad in ("0", "-5", "abc", "1.5", "012", ""):
+            with self.subTest(limit=bad):
+                code, _ = self._run_atx([*self.ANALYSIS, "--limit-minutes", bad])
+                self.assertEqual(code, 2)
+
+    def test_atx_flags_on_another_target_are_refused(self) -> None:
+        price = ["--price-fixture", str(FIXTURES / "prices.json")]
+        self.assertEqual(
+            estimate.main(["--target", "teardown", "--limit-minutes", "120", *price]), 2
+        )
+        self.assertEqual(
+            estimate.main(["--target", "teardown", *self.ANALYSIS, *price]), 2
+        )
+
+    def test_analysis_records_parameters_and_ceiling(self) -> None:
+        code, payload = self._run_atx([*self.ANALYSIS, "--limit-minutes", "120"])
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            payload["parameters"],
+            [
+                {
+                    "ParameterKey": "Transformation",
+                    "ParameterValue": "AWS/comprehensive-codebase-analysis",
+                },
+                {"ParameterKey": "LimitMinutes", "ParameterValue": "120"},
+            ],
+        )
+        self.assertAlmostEqual(payload["total_usd"], 4.20, places=2)
+        self.assertNotIn("expected", payload)
+        self.assertEqual(len(payload["line_items"]), 1)
+        self.assertEqual(payload["line_items"][0]["agent_minutes"], 120)
+
+    def test_dotnet_records_ceiling_and_expected_zero_within_quota(self) -> None:
+        code, payload = self._run_atx([*self.DOTNET, "--limit-minutes", "300"])
+        self.assertEqual(code, 0)
+        pairs = {p["ParameterKey"]: p["ParameterValue"] for p in payload["parameters"]}
+        self.assertEqual(pairs["Transformation"], "AWS/dotnet-modernization")
+        self.assertEqual(pairs["LimitMinutes"], "300")
+        self.assertAlmostEqual(payload["total_usd"], 10.50, places=2)
+        self.assertEqual(payload["expected"]["usd"], 0.0)
+        self.assertIn("not observable", payload["expected"]["caveat"])
+        self.assertIn("50,000", payload["expected"]["basis"])
+        expected_item = payload["line_items"][1]
+        self.assertIsNone(expected_item["subtotal_usd"])
+        self.assertIn("not observable", expected_item["note"])
+
+    def test_missing_unit_price_is_recorded_not_guessed(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            fixture = Path(d) / "prices.json"
+            fixture.write_text(
+                json.dumps({"fsx_ssd_gb_month": 0.150}), encoding="utf-8"
+            )
+            code, payload = self._run_atx(
+                [*self.ANALYSIS, "--limit-minutes", "120"], price_fixture=fixture
+            )
+        self.assertEqual(code, 0)
+        item = payload["line_items"][0]
+        self.assertIsNone(item["subtotal_usd"])
+        self.assertEqual(item["note"], "not retrieved")
+        self.assertIsNone(payload["total_usd"])
+
+    def test_no_price_fixture_exits_1(self) -> None:
+        code, _ = self._run_atx(
+            [*self.ANALYSIS, "--limit-minutes", "120"], price_fixture=None
+        )
+        self.assertEqual(code, 1)
 
 
 class ValidationTests(unittest.TestCase):
