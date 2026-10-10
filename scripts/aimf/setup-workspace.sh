@@ -107,7 +107,8 @@ step4_wire() {
     exit 1
   fi
   mkdir -p "$(dirname "$hook_file")"
-  # The same three hooks and the Hub matcher at both sites (design 案 C). install.sh rewrites the
+  # The same three hooks at both sites (design 案 C): the Hub regex in the workspace file, exact tool
+  # names in the agent config (see the note in the Python below). install.sh rewrites the
   # agent config on every run, so our entries are re-added after AIMF's own preToolUse entry, and any
   # earlier copy of them is dropped first so a re-run does not duplicate them.
   python3 - "$agent_cfg" "$hook_file" "$GUARD_ABS" "$CANARY_ABS" "$ATX_BLOCK_ABS" <<'PY'
@@ -152,9 +153,14 @@ kept = [
     for entry in hooks.get("preToolUse") or []
     if not any(name in str(entry.get("command", "")) for name in OURS)
 ]
+# The agent config takes one exact tool name per entry (U28, observed 2026-10-09 with kiro-cli
+# 2.28.0): the V2 engine, which plain `kiro-cli chat` runs, matched neither the Hub regex nor
+# "execute_bash|use_aws", and refused to load the agent when the matcher was a list. Each name
+# also matches its documented alias (shell, aws).
 hooks["preToolUse"] = kept + [
-    {"matcher": MATCHER, "command": command, "timeout_ms": 30000}
+    {"matcher": tool, "command": command, "timeout_ms": 30000}
     for _, command in commands("agent-config")
+    for tool in ("execute_bash", "use_aws")
 ]
 with open(agent_path, "w", encoding="utf-8") as handle:
     json.dump(agent, handle, indent=2)

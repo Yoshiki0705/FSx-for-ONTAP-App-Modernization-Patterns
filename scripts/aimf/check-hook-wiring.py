@@ -13,10 +13,18 @@ and the two sites are:
   - the workspace hook file  (.kiro/hooks/*.json, v1 format)
   - the agent config preToolUse  (.kiro/agents/migration.json)
 
-A site's matcher must cover the same tools as the Hub matcher: execute_bash, shell, use_aws, aws.
-Two matcher formats are accepted because the agent config's matcher may or may not take a regex
-(U28): either a regex such as ^(execute_bash|shell|use_aws|aws)$, or an explicit list of tool names.
-A matcher narrower than the Hub set fails.
+Each hook's matchers at a site, taken together, must cover the same tools as the Hub matcher:
+execute_bash, shell, use_aws, aws. Kiro documents shell/execute_bash and aws/use_aws as aliases of
+one tool each, so an exact name covers its alias. The two sites take different matcher formats
+(U28, observed 2026-10-09 with kiro-cli 2.28.0):
+
+  - workspace v1 file: a regex such as ^(execute_bash|shell|use_aws|aws)$ (read by the V3 engine
+    only; the V2 engine does not read this file).
+  - agent config: one exact tool name per entry, e.g. "execute_bash" and "use_aws". The V2 engine
+    (the default) matched neither the regex nor "execute_bash|use_aws", so such an entry never
+    fires there; a JSON list makes V2 refuse to load the agent. Either is a failure here.
+
+A matcher set narrower than the Hub set fails.
 
 The guard must be referenced by the tracked absolute path; a copy under .kiro/ or $HOME is invisible
 to collaborators and drifts.
@@ -44,17 +52,40 @@ REQUIRED_TOOLS = {"execute_bash", "shell", "use_aws", "aws"}
 REQUIRED_HOOKS = ("guard_irreversible_ops.py", "hook_canary.py", "block_direct_atx.py")
 
 
-def matcher_covers(matcher: object) -> bool:
-    """True when a matcher (regex string or list of tool names) covers every required tool."""
-    if isinstance(matcher, list):
-        return REQUIRED_TOOLS.issubset(set(matcher))
+ALIASES = ({"execute_bash", "shell"}, {"use_aws", "aws"})
+EXACT_NAME = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _with_aliases(tools: set[str]) -> set[str]:
+    covered = set(tools)
+    for group in ALIASES:
+        if covered & group:
+            covered |= group
+    return covered
+
+
+def covered_tools(matcher: object, site_kind: str) -> set[str]:
+    """Required tools one matcher covers at a site of the given kind ("workspace" or "agent")."""
+    if site_kind == "agent":
+        # Only an exact tool name fires under the V2 engine; it also covers its alias.
+        if isinstance(matcher, str) and EXACT_NAME.fullmatch(matcher):
+            return _with_aliases({matcher} & REQUIRED_TOOLS)
+        return set()
     if isinstance(matcher, str):
         try:
             pattern = re.compile(matcher)
         except re.error:
-            return False
-        return all(pattern.fullmatch(tool) for tool in REQUIRED_TOOLS)
-    return False
+            return set()
+        return {tool for tool in REQUIRED_TOOLS if pattern.fullmatch(tool)}
+    return set()
+
+
+def matcher_covers(matchers: list[object], site_kind: str) -> bool:
+    """True when the union of a hook's matchers at one site covers every required tool."""
+    covered: set[str] = set()
+    for matcher in matchers:
+        covered |= covered_tools(matcher, site_kind)
+    return REQUIRED_TOOLS.issubset(covered)
 
 
 def _preToolUse_entries(site: dict) -> list[dict]:
@@ -102,7 +133,7 @@ def commands_of(site: dict) -> list[tuple[str, object]]:
     return pairs
 
 
-def site_problems(label: str, site: dict, guard_abs: str) -> list[str]:
+def site_problems(label: str, site: dict, guard_abs: str, site_kind: str) -> list[str]:
     pairs = commands_of(site)
     problems: list[str] = []
     for hook in REQUIRED_HOOKS:
@@ -116,16 +147,21 @@ def site_problems(label: str, site: dict, guard_abs: str) -> list[str]:
             problems.append(
                 f"{label}: guard is not referenced by the tracked path {guard_abs}"
             )
-        if not any(matcher_covers(m) for _, m in matching):
+        if not matcher_covers([m for _, m in matching], site_kind):
             problems.append(
-                f"{label}: {hook} matcher is narrower than {sorted(REQUIRED_TOOLS)}"
+                f"{label}: {hook} matchers do not cover {sorted(REQUIRED_TOOLS)}"
+                + (
+                    " (agent config needs exact tool names)"
+                    if site_kind == "agent"
+                    else ""
+                )
             )
     return problems
 
 
 def check_sites(workspace_site: dict, agent_site: dict, guard_abs: str) -> list[str]:
-    problems = site_problems("workspace-hook", workspace_site, guard_abs)
-    problems += site_problems("agent-config", agent_site, guard_abs)
+    problems = site_problems("workspace-hook", workspace_site, guard_abs, "workspace")
+    problems += site_problems("agent-config", agent_site, guard_abs, "agent")
     return problems
 
 
@@ -176,11 +212,9 @@ def _good_sites(guard_abs: str) -> tuple[dict, dict]:
             "userPromptSubmit": [{"command": "03-worklog/turn-log.sh"}],
             "preToolUse": [{"command": "03-worklog/work-declaration-guard.sh"}]
             + [
-                {
-                    "matcher": ["execute_bash", "shell", "use_aws", "aws"],
-                    "command": c.format(source="agent-config"),
-                }
+                {"matcher": tool, "command": c.format(source="agent-config")}
                 for c in commands
+                for tool in ("execute_bash", "use_aws")
             ],
         },
     }
@@ -218,12 +252,25 @@ def selftest() -> int:
     if not check_sites(wrong_trigger_ws, good_agent, guard_abs):
         failures.append("a PostToolUse hook should not count as PreToolUse wiring")
 
-    # Narrow matcher: agent config matcher only covers execute_bash.
+    # Narrow matcher: the agent config wires only execute_bash, so use_aws is unguarded.
     narrow_agent = json.loads(json.dumps(good_agent))
-    for entry in narrow_agent["hooks"]["preToolUse"]:
-        entry["matcher"] = ["execute_bash"]
+    narrow_agent["hooks"]["preToolUse"] = [
+        e for e in narrow_agent["hooks"]["preToolUse"] if e.get("matcher") != "use_aws"
+    ]
     if not check_sites(good_ws, narrow_agent, guard_abs):
         failures.append("a matcher narrower than the Hub set should fail")
+
+    # The agent config with the Hub regex, a pipe, or a list: none fires under the V2 engine.
+    for bad in (
+        "^(execute_bash|shell|use_aws|aws)$",
+        "execute_bash|use_aws",
+        ["execute_bash", "shell", "use_aws", "aws"],
+    ):
+        regex_agent = json.loads(json.dumps(good_agent))
+        for entry in regex_agent["hooks"]["preToolUse"][1:]:
+            entry["matcher"] = bad
+        if not check_sites(good_ws, regex_agent, guard_abs):
+            failures.append(f"agent-config matcher {bad!r} should fail")
 
     # Guard referenced by a non-tracked path should fail.
     wrong_path_ws = json.loads(json.dumps(good_ws))
@@ -241,7 +288,7 @@ def selftest() -> int:
         return 1
     print(
         "selftest: wiring check passes a good pair and fails "
-        "missing/rewritten/wrong-trigger/narrow/untracked-path"
+        "missing/rewritten/wrong-trigger/narrow/non-exact-agent-matcher/untracked-path"
     )
     return 0
 
