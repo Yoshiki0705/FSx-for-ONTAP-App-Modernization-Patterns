@@ -239,13 +239,25 @@ class AtxEstimateTests(unittest.TestCase):
                 self.assertEqual(code, 2)
 
     def test_atx_flags_on_another_target_are_refused(self) -> None:
+        # Route through a temp ESTIMATES_DIR so a validation regression cannot write a teardown
+        # estimate into the real .private/estimates relative to the cwd.
         price = ["--price-fixture", str(FIXTURES / "prices.json")]
-        self.assertEqual(
-            estimate.main(["--target", "teardown", "--limit-minutes", "120", *price]), 2
-        )
-        self.assertEqual(
-            estimate.main(["--target", "teardown", *self.ANALYSIS, *price]), 2
-        )
+        with tempfile.TemporaryDirectory() as d:
+            orig = estimate.ESTIMATES_DIR
+            estimate.ESTIMATES_DIR = Path(d) / "estimates"
+            try:
+                self.assertEqual(
+                    estimate.main(
+                        ["--target", "teardown", "--limit-minutes", "120", *price]
+                    ),
+                    2,
+                )
+                self.assertEqual(
+                    estimate.main(["--target", "teardown", *self.ANALYSIS, *price]), 2
+                )
+                self.assertEqual(sorted(estimate.ESTIMATES_DIR.glob("*.json")), [])
+            finally:
+                estimate.ESTIMATES_DIR = orig
 
     def test_analysis_records_parameters_and_ceiling(self) -> None:
         code, payload = self._run_atx([*self.ANALYSIS, "--limit-minutes", "120"])

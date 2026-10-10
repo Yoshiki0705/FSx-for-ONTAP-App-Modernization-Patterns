@@ -57,7 +57,8 @@
 # Before calling atx it performs the SAME entry check as deploy.sh (scripts/lib/entry-check.sh)
 # with target=atx, then:
 #   - scans the send directory with gitleaks using scripts/aimf/gitleaks-send.toml (which does NOT
-#     allow-list .private/, unlike the repo .gitleaks.toml), failing on any finding;
+#     allow-list .private/, unlike the repo .gitleaks.toml); a finding or a missing binary refuses
+#     the send with exit 2, since nothing has been sent yet;
 #   - sets AWS_REGION=ap-northeast-1 (and unsets ATX_CUSTOM_ENDPOINT, which would override it),
 #     records that value as aws_region_env, and records regionSource as atx itself logged it;
 #   - reads atx's exit status from PIPESTATUS, not from tee. On 0 the estimate moves to
@@ -267,7 +268,18 @@ echo "run-atx: scanning $SEND_DIR with gitleaks-send.toml before sending"
 if [ -n "$DRY_RUN" ]; then
   echo "DRY-RUN: gitleaks dir $SEND_DIR --no-banner --redact --exit-code 1 --config $SEND_CONFIG"
 else
+  # A finding (or a missing binary) must refuse the send with the documented refusal code (2),
+  # not fall through set -e as 1/127, which the exit-code contract reads as "atx failed". Nothing
+  # has been sent yet at this point, so 2 is correct.
+  set +e
   gitleaks dir "$SEND_DIR" --no-banner --redact --exit-code 1 --config "$SEND_CONFIG"
+  gitleaks_rc=$?
+  set -e
+  if [ "$gitleaks_rc" -ne 0 ]; then
+    echo "run-atx: gitleaks reported a finding or failed to run (exit $gitleaks_rc);" \
+      "nothing was sent. Not sending." >&2
+    exit 2
+  fi
 fi
 
 export AWS_REGION="$REGION"
@@ -360,7 +372,21 @@ if [ "$atx_rc" -eq 2 ]; then
   region_line="$(region_of_run)"
   echo "$region_line" >>"$RUN_LOG"
   echo "$region_line"
+  # This run was billed to the cap, so an incomplete run log must be reported here too, as on the
+  # success path. The exit code stays 3 (the run reached the limit); the warning is advisory.
+  if [ "$tee_rc" -ne 0 ]; then
+    echo "run-atx: writing the run log failed (tee exit $tee_rc); the run log is incomplete" >&2
+  fi
   echo "run-atx: atx exit=2: $LIMIT_MESSAGE (limit_minutes=$ATX_LIMIT)" >&2
+  # dotnet-modernization rewrites the code in place, so after a limit stop the send copy is dirty
+  # and the clean-tree gate refuses a re-run. Resuming it is a human decision (recreate the copy
+  # from a committed state, or keep the partial result) and is outside this script.
+  case "$ATX_TRANSFORMATION" in
+    AWS/dotnet-modernization)
+      echo "run-atx: $ATX_TRANSFORMATION rewrote $SEND_DIR, so a re-run is refused by the" \
+        "clean-tree gate; resuming it is a human decision, not run-atx.sh" >&2
+      ;;
+  esac
   exit 3
 fi
 

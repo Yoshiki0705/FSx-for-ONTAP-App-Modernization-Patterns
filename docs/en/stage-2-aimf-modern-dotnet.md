@@ -90,8 +90,10 @@ actually used.
   fixed assessment and planning work and for repeated attempts when the build does not pass on the
   workstation, the cap is six times that, 300
 - `AWS/comprehensive-codebase-analysis`: the pricing page has no example for this transformation.
-  Its examples run from 20 to 72 agent minutes for 3,000 to 17,000 lines, the largest being a Java
-  language version upgrade of 17,000 lines at about 72 agent minutes. With no example for this
+  Its three non-.NET examples run from 20 to 72 agent minutes for 3,000 to 17,000 lines, the
+  largest being a Java language version upgrade of 17,000 lines at about 72 agent minutes (the .NET
+  example, about 500,000 lines at about 25,000 agent minutes, is a different order of magnitude and
+  is not used as a small-codebase guide). With no example for this
   transformation, 120, above the largest example, is set as a judgement
 
 ## How to choose between the transformations

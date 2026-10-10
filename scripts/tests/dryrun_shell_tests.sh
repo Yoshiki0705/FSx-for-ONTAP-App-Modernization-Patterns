@@ -946,6 +946,23 @@ else
   printf '%s\n' "$R_OUT" >&2; cat "$TMP/atx-run-limit.log" >&2
   FAILURES=$((FAILURES + 1))
 fi
+# (7b) a gitleaks finding (mock exit 1) refuses the send with the documented refusal code 2, not 1,
+# and atx is never called.
+GL_FIND="$MOCK_BIN/gitleaks"
+printf '#!/bin/bash\nexit 1\n' >"$GL_FIND"; chmod +x "$GL_FIND"
+EST_GL="$(new_atx_estimate atx-gitleaks-find)"
+rm -f "$MOCK_ATX_ARGV"
+GL_OUT="$("${ATX_ENV[@]}" APPMOD_ATX_VERIFIED_RECORD="$VREC" \
+  bash scripts/aimf/run-atx.sh --estimate "$EST_GL" --approved-at "$APPROVED" 2>&1)"; GL_RC=$?
+if [ "$GL_RC" -eq 2 ] && [ ! -f "$MOCK_ATX_ARGV" ] && [ -f "$EST_GL" ] \
+  && printf '%s' "$GL_OUT" | grep -qF "gitleaks reported a finding or failed to run"; then
+  echo "ok: run-atx refuses with exit 2 when gitleaks reports a finding (atx not called)"
+else
+  echo "FAIL: run-atx with a gitleaks finding (rc=$GL_RC) should exit 2 without calling atx" >&2
+  printf '%s\n' "$GL_OUT" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+printf '#!/bin/bash\nexit 0\n' >"$GL_FIND"; chmod +x "$GL_FIND"
 # (8) dotnet send dir that is a git repository with no commits
 DN_EMPTY="$TMP/atx-dotnet-nocommit"; mkdir -p "$DN_EMPTY"; printf 'x\n' >"$DN_EMPTY/A.cs"
 tgit -C "$DN_EMPTY" init -q
@@ -989,6 +1006,78 @@ else
   echo "argv: $(cat "$MOCK_ATX_ARGV" 2>/dev/null)" >&2; cat "$TMP/atx-run-dotnet.log" >&2
   FAILURES=$((FAILURES + 1))
 fi
+# (12) a dotnet run that stops at the limit (atx exit 2) also prints that resuming it is a human
+# decision, since its own clean-tree gate refuses the re-run the limit message otherwise suggests.
+# A fresh committed copy is used so the earlier dotnet case's state does not matter.
+DN_LIM="$TMP/atx-dotnet-limit-send"
+make_committed_copy "$DN_LIM"
+EST_RD="$(new_atx_estimate atx-dotnet-limit AWS/dotnet-modernization 300)"
+: >"$TMP/atx-run-dnlimit.log"
+RD_OUT="$("${ATX_ENV[@]}" APPMOD_RUN_LOG="$TMP/atx-run-dnlimit.log" \
+  APPMOD_ATX_VERIFIED_RECORD="$VREC_DN" APPMOD_SEND_DIR="$DN_LIM" \
+  APPMOD_ANALYSIS_SEND_DIR="$AN_SEND" MOCK_ATX_RC=2 \
+  bash scripts/aimf/run-atx.sh --estimate "$EST_RD" --approved-at "$APPROVED" 2>&1)"
+RD_RC=$?
+if [ "$RD_RC" -eq 3 ] && [ -f "$EST_DIR/used/atx-dotnet-limit.json" ] \
+  && printf '%s' "$RD_OUT" | grep -qF "resuming it is a human decision"; then
+  echo "ok: run-atx tells the operator that resuming a limit-stopped dotnet run is a human decision"
+else
+  echo "FAIL: run-atx dotnet limit stop (rc=$RD_RC) should exit 3 and flag resume as a human decision" >&2
+  printf '%s\n' "$RD_OUT" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+# (12) default paths: with neither APPMOD_ATX_VERIFIED_RECORD nor APPMOD_SEND_DIR set, the dry-run
+# gate names the slug-based default record and the default send dir, so a regression in those
+# defaults is caught. Dry-run so no real send dir is required; cwd is a temp dir so a stray
+# .private/ cannot interfere. The verification gate only reports under dry-run, so the absence of a
+# real record is fine.
+# run-atx.sh resolves the default send dirs relative to cwd, so the gate runs in a temp cwd that
+# holds the default .private/aimf layout: an analysis dir (no commits needed) and a committed dotnet
+# dir. The repo-relative estimate/record paths still need the real repo, so they are passed absolute.
+# (13) default paths. run-atx.sh resolves the default record and send-dir paths relative to cwd, so the gate runs in a
+# temp cwd that holds the default .private layout: a verification record at the slug-based default
+# path (so the "verified by" line prints that path), an analysis send dir (no commits needed), and a
+# committed dotnet send dir. Neither APPMOD_ATX_VERIFIED_RECORD nor APPMOD_SEND_DIR is set, so this
+# is the only case that exercises both defaults (review finding 4). The estimate path is absolute.
+DEF_CWD="$TMP/atx-defaults"
+mkdir -p "$DEF_CWD/.private/aimf/DocIntake" "$DEF_CWD/.private/runs"
+make_committed_copy "$DEF_CWD/.private/aimf/DocIntake-atx-dotnet"
+REPO_DIR="$(pwd)"
+def_record() {  # def_record <slug> <transformation> <limit>
+  cat >"$DEF_CWD/.private/runs/atx-invocation-verified-$1.json" <<EOF
+{"invocation": "atx custom def exec -n $2 -p . -x -t --limit $3",
+ "transformation": "$2", "limit_minutes": $3,
+ "region": "ap-northeast-1", "atx_version": "mock", "verified_at": "2026-01-01T00:00:00Z"}
+EOF
+}
+def_record comprehensive-codebase-analysis AWS/comprehensive-codebase-analysis 120
+def_record dotnet-modernization AWS/dotnet-modernization 120
+def_dryrun() {  # def_dryrun <label> <transformation> <slug> <send-dir-substr>
+  local label="$1" tx="$2" slug="$3" send="$4" out rc est
+  est="$EST_DIR/def-$slug.json"
+  printf '{"target": "atx", "region": "ap-northeast-1", "created_at": "%s", "hours": 0, "parameters": %s}\n' \
+    "$CREATED" "$(atx_params_json "$tx" "120")" >"$est"
+  python3 - "$APPROVAL" "$est" "$APPROVED" <<'PY'
+import json,sys
+p,est,approved=sys.argv[1:4]
+d=json.load(open(p)); d.append({"target":"atx","approved_at":approved,"estimate_file":est}); json.dump(d,open(p,"w"))
+PY
+  out="$(cd "$DEF_CWD" && env -u APPMOD_SEND_DIR -u APPMOD_ATX_VERIFIED_RECORD APPMOD_DRY_RUN=1 \
+    bash "$REPO_DIR/scripts/aimf/run-atx.sh" --estimate "$est" --approved-at "$APPROVED" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] \
+    && printf '%s' "$out" | grep -qF "atx-invocation-verified-$slug.json" \
+    && printf '%s' "$out" | grep -qF "$send"; then
+    echo "ok: $label"
+  else
+    echo "FAIL: $label (rc=$rc)" >&2; printf '%s\n' "$out" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+def_dryrun "run-atx dry-run names the default analysis record and send dir" \
+  AWS/comprehensive-codebase-analysis comprehensive-codebase-analysis ".private/aimf/DocIntake"
+def_dryrun "run-atx dry-run names the default dotnet record and send dir" \
+  AWS/dotnet-modernization dotnet-modernization ".private/aimf/DocIntake-atx-dotnet"
 
 echo "----"
 if [ "$FAILURES" -ne 0 ]; then

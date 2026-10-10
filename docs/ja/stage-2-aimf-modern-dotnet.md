@@ -72,7 +72,7 @@ AWS Transform custom の AWS 管理の変換は 2 つを使い、`AWS/dotnet-mod
 
 - サンプルは C# で約 900 行（`app/legacy/` の `.cs` の合計）
 - `AWS/dotnet-modernization`: 料金ページの例（50k 行の .NET Framework で約 2,800 agent minutes、1 行あたり約 0.056）をこの規模に当てると約 50 分になる。評価と計画の固定分と、作業端末でビルドが通らない場合の繰り返しを見込んで、その 6 倍の 300 にした
-- `AWS/comprehensive-codebase-analysis`: 料金ページにこの変換の例はない。同じページの例は 3,000〜17,000 行で 20〜72 agent minutes で、最大は 17,000 行の Java の言語バージョンの更新で約 72 agent minutes である。例のない変換なので、例の最大値を上回る 120 を判断として置いた
+- `AWS/comprehensive-codebase-analysis`: 料金ページにこの変換の例はない。.NET 以外の 3 つの例は 3,000〜17,000 行で 20〜72 agent minutes で、最大は 17,000 行の Java の言語バージョンの更新で約 72 agent minutes である（.NET の例は約 500,000 行で約 25,000 agent minutes と桁が違うため、小規模の目安には使わない）。例のない変換なので、小規模の例の最大値を上回る 120 を判断として置いた
 
 ## 変換の選び方
 
