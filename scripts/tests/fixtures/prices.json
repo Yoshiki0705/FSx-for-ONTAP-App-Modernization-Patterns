@@ -11,6 +11,6 @@
   "lambda_request": 0.0000002,
   "lambda_gb_second": 0.0000166667,
   "cwl_ingest_gb": 0.76,
-  "s3_put_list_request": 0.0000047,
-  "s3_get_request": 0.00000037
+  "fsx_s3ap_put_list_request": 0.00000108,
+  "fsx_s3ap_get_request": 0.000000029
 }

@@ -7,7 +7,7 @@ move the origin", the --target base minimum recheck (exit 4 on mismatch, exit 0 
 --target atx: --transformation / --limit-minutes required and allow-listed (exit 2 otherwise),
 refused on other targets, recorded as parameters, and priced as the ceiling N x unit price, with
 an expected $0 inside the AWS/dotnet-modernization quota. --target stage3: add-on line items only,
-the S3 Access Points request charge priced at the S3 PUT/LIST list rate as an upper bound (GET rate
+the S3 Access Points request charge priced at the FSx for ONTAP PUT/LIST rate as an upper bound (GET rate
 shown for reference only, a missing S3 request price recorded as "not retrieved"), stage-3
 parameters recorded with the template's defaults, and bad stage-3 inputs refused.
 """
@@ -395,31 +395,36 @@ class Stage3EstimateTests(unittest.TestCase):
             item["quantity"], 20 * estimate.STAGE3_S3AP_REQUESTS_PER_INVOCATION
         )
         self.assertEqual(item["quantity"], 2000)
-        self.assertEqual(item["unit_usd"], 0.0000047)
-        self.assertAlmostEqual(item["subtotal_usd"], 2000 * 0.0000047, places=9)
+        self.assertEqual(item["unit_usd"], 0.00000108)
+        self.assertAlmostEqual(item["subtotal_usd"], 2000 * 0.00000108, places=9)
         self.assertIn("upper bound", item["note"])
-        self.assertIn("assumption", item["note"])
+        self.assertIn("not confirmed billing", item["note"])
         self.assertNotIn("not retrieved", item["note"])
-        # The basis: the English pricing page for "billed", the S3 Price List SKUs for the unit.
+        # The basis: the English FSx for ONTAP pricing page, tab "S3 Access Points for FSx".
         for text in (
             "https://aws.amazon.com/fsx/netapp-ontap/pricing/",
-            "XAKHUSC46NWC9PPM",
-            "9C7873KU3ZQBD6BJ",
             "2026-10-12",
             "ap-northeast-1",
             "S3 Access Points for FSx",
-            "assumes",
+            "$0.00108",
+            "$0.000029",
+            "not visible to a plain HTTP fetch",
+            "Price List API",
+            "not verified",
         ):
             self.assertIn(text, item["source"])
+        # The Amazon S3 list-price SKUs are not the unit-price source.
+        for text in ("XAKHUSC46NWC9PPM", "9C7873KU3ZQBD6BJ", "0.0047", "0.0037"):
+            self.assertNotIn(text, item["source"])
 
     def test_get_rate_is_a_reference_line_outside_the_total(self) -> None:
         code, payload = self._run_stage3(["--invocations", "20"])
         self.assertEqual(code, 0)
         ref = self._item(payload, "FSx for ONTAP S3 Access Points requests (GET")
-        self.assertEqual(ref["unit_usd"], 0.00000037)
+        self.assertEqual(ref["unit_usd"], 0.000000029)
         self.assertIsNone(ref["subtotal_usd"])
-        self.assertAlmostEqual(ref["reference_usd"], 2000 * 0.00000037, places=9)
-        self.assertLess(ref["unit_usd"], 0.0000047)
+        self.assertAlmostEqual(ref["reference_usd"], 2000 * 0.000000029, places=9)
+        self.assertLess(ref["unit_usd"], 0.00000108)
         self.assertIn("reference only", ref["note"])
 
     def test_stage3_total_includes_the_request_line(self) -> None:
@@ -428,12 +433,12 @@ class Stage3EstimateTests(unittest.TestCase):
         expected = (
             20 * 0.0000002
             + 1200 * 0.0000166667
-            + 2000 * 0.0000047
+            + 2000 * 0.00000108
             + round(20 / 1024, 6) * 0.76
         )
         self.assertAlmostEqual(payload["total_usd"], expected, places=2)
         # The request line is a real contribution: dropping it changes the rounded total.
-        without = expected - 2000 * 0.0000047
+        without = expected - 2000 * 0.00000108
         self.assertNotEqual(round(without, 2), round(expected, 2))
         self.assertNotIn(
             "not retrieved",
@@ -453,14 +458,14 @@ class Stage3EstimateTests(unittest.TestCase):
     def test_missing_s3_request_price_is_recorded_not_guessed(self) -> None:
         for missing, label, other in (
             (
-                "s3_put_list_request",
+                "fsx_s3ap_put_list_request",
                 "FSx for ONTAP S3 Access Points requests (ceiling",
-                "s3_get_request",
+                "fsx_s3ap_get_request",
             ),
             (
-                "s3_get_request",
+                "fsx_s3ap_get_request",
                 "FSx for ONTAP S3 Access Points requests (GET",
-                "s3_put_list_request",
+                "fsx_s3ap_put_list_request",
             ),
         ):
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as d:
@@ -497,7 +502,7 @@ class Stage3EstimateTests(unittest.TestCase):
             )
         self.assertEqual(code, 0)
         item = self._item(payload, "FSx for ONTAP S3 Access Points requests (ceiling")
-        self.assertEqual(item["unit_usd"], 0.0000047)
+        self.assertEqual(item["unit_usd"], 0.00000108)
 
     def test_missing_lambda_price_is_recorded_not_guessed(self) -> None:
         with tempfile.TemporaryDirectory() as d:

@@ -20,8 +20,8 @@ Three jobs, selected by flags:
                  caveat that this script cannot observe how much of the quota is left.
                  --target stage3 prices only the add-on stack (Lambda requests and GB-seconds for
                  --invocations manual runs at the template's memory and timeout ceiling, S3 Access
-                 Point requests priced at the Amazon S3 PUT/LIST list rate as an assumed upper
-                 bound, CloudWatch Logs, and a $0 DISABLED schedule) and records the
+                 Point requests priced at the FSx for ONTAP S3 Access Points PUT/LIST rate as an
+                 assumed upper bound, CloudWatch Logs, and a $0 DISABLED schedule) and records the
                  stage-3 deploy parameters, which deploy.sh stage3 passes to create-stack.
   --elapsed      Compute the elapsed fraction of the approved base time from approval.json and
                  return exit 3 when it exceeds 80%. The origin is always the base approval time; atx
@@ -128,27 +128,26 @@ STAGE3_MAX_INVOCATIONS = 10000
 # inbox document, the index write and read-back; Probe: about ten) and log bytes per invocation.
 STAGE3_S3AP_REQUESTS_PER_INVOCATION = 100
 STAGE3_LOG_MIB_PER_INVOCATION = 1
-# The English FSx for ONTAP pricing page (read 2026-10-12) has an "S3 Access Points for FSx" section. It
-# says you pay for S3 requests made against S3 Access Points, by request type (PUT/COPY/POST/LIST and
-# GET/other, per 1,000 requests), at the same rate as API/SDK requests. The table's numbers are rendered
-# client-side, so they were not read. The estimate uses the Amazon S3 Price List values (service
-# AmazonS3, ap-northeast-1, On-Demand), read 2026-10-12: APN1-Requests-Tier1 (SKU XAKHUSC46NWC9PPM) is
-# $0.0047 per 1,000 PUT/COPY/POST/LIST requests; APN1-Requests-Tier2 (SKU 9C7873KU3ZQBD6BJ) is $0.0037
-# per 10,000 GET requests. That these equal the numbers the page displays is ASSUMED, not checked
-# (an assumption, not confirmed billing). The AmazonFSx Price List has no S3 Access Points request
-# usagetype (checked 2026-10-11).
+# Unit prices come from the English Amazon FSx for NetApp ONTAP pricing page, tab "S3 Access Points for
+# FSx", read 2026-10-12 (JST). The tab is rendered client-side, so a plain HTTP fetch does not show it.
+# Tokyo (ap-northeast-1): $0.00108 per 1,000 PUT/COPY/POST/LIST requests, $0.000029 per 1,000 GET and
+# all other requests; the page says charges accrue at the same rate as requests made with the API/SDK.
+# Documented (vendor pricing page), one page, one reading. The AWS Price List API (service code
+# AmazonFSx) was NOT checked for a matching SKU: not verified, follow-up. Amazon S3 list prices are
+# higher and are NOT used.
 FSX_S3AP_REQUEST_SOURCE = (
-    "Requests are billed, by request type: https://aws.amazon.com/fsx/netapp-ontap/pricing/ (English "
-    "page, section S3 Access Points for FSx, read 2026-10-12; the displayed numbers are rendered "
-    "client-side and were not read). Unit price used: Amazon S3 Price List, ap-northeast-1, read "
-    "2026-10-12 - APN1-Requests-Tier1 SKU XAKHUSC46NWC9PPM $0.0047/1,000 PUT/COPY/POST/LIST; "
-    "APN1-Requests-Tier2 SKU 9C7873KU3ZQBD6BJ $0.0037/10,000 GET. The estimate assumes these equal "
-    "the page's displayed values; that match is not checked"
+    "Amazon FSx for NetApp ONTAP pricing, English page, tab 'S3 Access Points for FSx', "
+    "https://aws.amazon.com/fsx/netapp-ontap/pricing/ , Asia Pacific (Tokyo) ap-northeast-1, read "
+    "2026-10-12 (JST). Row 'FSx for NetApp ONTAP': $0.00108 per 1,000 PUT/COPY/POST/LIST requests; "
+    "$0.000029 per 1,000 GET and all other requests. The tab is rendered client-side and is not "
+    "visible to a plain HTTP fetch. The Price List API (AmazonFSx) was not checked for a matching "
+    "SKU: not verified. Amazon S3 list prices are higher and were not used"
 )
 S3AP_REQUEST_CEILING_NOTE = (
     "upper bound: every assumed request is priced at the PUT/COPY/POST/LIST rate "
-    "(s3_put_list_request); the GET rate (s3_get_request) is lower and shown on the next line for "
-    "reference only. That the S3 list prices equal the pricing page's displayed values is an assumption, not confirmed billing"
+    "(fsx_s3ap_put_list_request); the GET and all-other rate (fsx_s3ap_get_request) is lower and "
+    "shown on the next line for reference only. Documented on one pricing page, read 2026-10-12; "
+    "not confirmed billing"
 )
 S3_DATA_TRANSFER_NOTE = (
     "not included in the total: data transfer through an S3 Access Point is billed as for an S3 "
@@ -503,12 +502,13 @@ def stage3_line_items(
       lambda_request    AWSLambda, usagetype APN1-Request (per request)
       lambda_gb_second  AWSLambda, usagetype APN1-Lambda-GB-Second, first tier (x86_64)
       cwl_ingest_gb     AmazonCloudWatch, usagetype APN1-DataProcessing-Bytes (Standard log class)
-      s3_put_list_request  AmazonS3, usagetype APN1-Requests-Tier1 (per request): PUT/COPY/POST/LIST.
-                        Prices every assumed S3 Access Points request, as an upper bound
-      s3_get_request    AmazonS3, usagetype APN1-Requests-Tier2 (per request): GET. Reference line
+      fsx_s3ap_put_list_request  FSx for ONTAP pricing page, tab "S3 Access Points for FSx"
+                        (FSX_S3AP_REQUEST_SOURCE), per request: PUT/COPY/POST/LIST. Prices every
+                        assumed S3 Access Points request, as an upper bound
+      fsx_s3ap_get_request  same tab, per request: GET and all other requests. Reference line
                         only, not in the total
-      The S3 rates are an assumption for S3 Access Points (FSX_S3AP_REQUEST_SOURCE). A price key
-      that is absent is recorded as "not retrieved" with a null subtotal, never defaulted.
+      A price key that is absent is recorded as "not retrieved" with a null subtotal, never
+      defaulted.
     The Lambda free tier is not applied. The base environment is not re-priced here.
     """
     gb_seconds = invocations * (STAGE3_MEMORY_MB / 1024) * STAGE3_TIMEOUT_S
@@ -553,7 +553,7 @@ def stage3_line_items(
             f"FSx for ONTAP S3 Access Points requests (ceiling, "
             f"{STAGE3_S3AP_REQUESTS_PER_INVOCATION} per invocation, assumed, at the "
             "PUT/LIST rate)",
-            "s3_put_list_request",
+            "fsx_s3ap_put_list_request",
             s3ap_requests,
             "requests",
             source=FSX_S3AP_REQUEST_SOURCE,
@@ -561,12 +561,12 @@ def stage3_line_items(
         ),
         usage(
             "FSx for ONTAP S3 Access Points requests (GET rate, reference only, not in the total)",
-            "s3_get_request",
+            "fsx_s3ap_get_request",
             s3ap_requests,
             "requests",
             reference_usd=None
-            if prices.get("s3_get_request") is None
-            else round(prices["s3_get_request"] * s3ap_requests, 6),
+            if prices.get("fsx_s3ap_get_request") is None
+            else round(prices["fsx_s3ap_get_request"] * s3ap_requests, 6),
             subtotal_usd=None,
             note="reference only: the same assumed requests at the GET rate; not added to the "
             "total",
