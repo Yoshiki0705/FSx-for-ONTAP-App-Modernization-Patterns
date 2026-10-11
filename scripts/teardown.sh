@@ -36,6 +36,11 @@
 # arguments and none is made, so the order can be exercised without credentials. Read calls under
 # dry-run report the object as present, so the delete calls are shown.
 #
+# The dedicated deploy bucket appmod-deploy-<account>-ap-northeast-1 (used by deploy.sh to hold the
+# base template for --template-url, because base.yaml exceeds the 51,200-byte inline limit) is NOT
+# the artifacts bucket and is intentionally left in place across rebuilds; teardown makes no call
+# against it. --bucket and empty_bucket below mean the stack's artifacts bucket only.
+#
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

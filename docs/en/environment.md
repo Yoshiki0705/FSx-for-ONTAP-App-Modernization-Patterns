@@ -82,6 +82,18 @@ whether the Systems Manager traffic went through the endpoints was not checked.
 The duration is from one creation and does not show that every creation takes the same time. It
 was shorter than the reference used in the design (the Hub measurement of 43 minutes).
 
+## How the base stack template is passed
+
+Step 4 creates `appmod-base` through `deploy.sh base`. `templates/base.yaml` is 52,466 bytes, over
+CloudFormation's 51,200-byte inline `--template-body` limit, so an inline `create-stack` fails with a
+`ValidationError` before creating anything. `deploy.sh` therefore uploads the template to a dedicated
+in-region deploy bucket (`appmod-deploy-<account>-ap-northeast-1`) and creates the stack with
+`--template-url`. That bucket is separate from the artifacts bucket the base stack creates, and is
+left in place across rebuilds rather than deleted; `teardown.sh` does not touch it.
+`stage3-serverless.yaml` is 9,542 bytes, under the limit, so it stays on `--template-body` and does
+not use `--template-url`. Either way, `--on-failure DELETE` and the approved `--parameters` are
+unchanged.
+
 ## Gaps found after creation
 
 > Evidence tier: `verified` (2026-10-07, ap-northeast-1, observed from the Windows Server 2022 EC2).
