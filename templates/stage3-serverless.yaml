@@ -4,20 +4,23 @@ AWSTemplateFormatVersion: '2010-09-09'
 # Point attached to the same appdata volume. It references only the base stack's exports
 # (Fn::ImportValue) and never the reverse, so deleting this stack does not affect appmod-base.
 #
-# The Lambda code and the migrated .NET package are decided later (tasks 5.1 / 5.2); here the
-# handler name and the package S3 key are parameters. The region is pinned in the Rules block, which
-# the cfn-guard region_pinned rule verifies on this template too.
+# The function is the DocIntake .NET 10 Lambda (handler DocIntake.Lambda::DocIntake.Lambda.Function
+# ::Handler). Its source is not in this repository; the deployment zip is uploaded to the artifacts
+# bucket at LambdaPackageKey before create-stack. The region is pinned in the Rules block, which the
+# cfn-guard region_pinned rule verifies on this template too. The VPC and subnet come from the base
+# stack's exports, and the Lambda gets its own security group, so no resource ID is a parameter.
 #
-# S3 Access Points have no S3 event notification, so the Worker is triggered by an EventBridge
-# Scheduler poll rather than by object events (Hub domain-knowledge). NetworkOrigin is VPC and the
-# file-system identity is a WINDOWS-type AD user; NetworkOrigin cannot be changed after creation, so
-# a change is a re-create, which needs a fresh stage3 estimate and approval.
+# S3 Access Points have no S3 event notification, so a Worker trigger has to be a poll (Hub
+# domain-knowledge). The EventBridge Scheduler schedule is created DISABLED: the measurement runs
+# invoke the function by hand (aws lambda invoke), and an enabled poll would bill and write to
+# appdata between runs. NetworkOrigin is VPC and the file-system identity is a WINDOWS-type AD user;
+# NetworkOrigin cannot be changed after creation, so a change is a re-create, which needs a fresh
+# stage3 estimate and approval.
 
 Description: >-
   Stage-3 add-on for the FSx for ONTAP application-modernization Spoke: an AWS Lambda Worker reached
-  through an FSx for ONTAP S3 Access Point attached to the appdata volume, triggered on a schedule
-  by Amazon EventBridge Scheduler. References the base stack's exports only. No Object Lock, no
-  WORM. Lambda code and package key are supplied as parameters, decided in a later task.
+  through an FSx for ONTAP S3 Access Point attached to the appdata volume, with an Amazon EventBridge
+  Scheduler poll created disabled. References the base stack's exports only. No Object Lock, no WORM.
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -26,8 +29,6 @@ Metadata:
           default: Base stack
         Parameters:
           - BaseStackName
-          - PrimarySubnetId
-          - LambdaSecurityGroupId
       - Label:
           default: Lambda package
         Parameters:
@@ -44,49 +45,47 @@ Parameters:
   BaseStackName:
     Type: String
     Default: appmod-base
-    Description: Name of the base stack whose exports (file system, volume) this stack imports.
-
-  PrimarySubnetId:
-    Type: AWS::EC2::Subnet::Id
-    Description: Primary subnet for the VPC-attached Lambda ENIs (same subnet as the file system).
-
-  LambdaSecurityGroupId:
-    Type: AWS::EC2::SecurityGroup::Id
-    Description: Security group for the Lambda ENIs; must reach the S3 gateway endpoint and the SVM.
+    Description: >-
+      Name of the base stack whose exports (VPC, primary subnet, appdata volume, artifacts bucket)
+      this stack imports.
 
   ArtifactsBucketName:
     Type: String
     Default: ''
     Description: >-
-      S3 bucket holding the Lambda deployment package. Defaults to the base stack's artifacts bucket
-      via Fn::ImportValue when left empty.
+      S3 bucket holding the Lambda deployment package and receiving the Probe results
+      (probe/<run-id>/lambda-s3.json). Defaults to the base stack's artifacts bucket via
+      Fn::ImportValue when left empty.
 
   LambdaPackageKey:
     Type: String
     Default: lambda/worker.zip
-    Description: S3 key of the Lambda deployment package built in task 5.2.
+    Description: >-
+      S3 key of the Lambda deployment zip (dotnet publish -r linux-x64 --self-contained false of
+      DocIntake.Lambda), uploaded to the artifacts bucket before create-stack.
 
   LambdaHandler:
     Type: String
-    Default: Worker::Worker.Function::Handler
-    Description: Lambda handler, decided in task 5.1 once the migrated runtime is fixed.
+    Default: DocIntake.Lambda::DocIntake.Lambda.Function::Handler
+    Description: Lambda handler of the DocIntake.Lambda assembly (assembly::type::method).
 
+  # dotnet10 is the managed .NET 10 runtime (Amazon Linux 2023; deprecation listed as 2028-11-14 on
+  # the Lambda runtimes page, read 2026-10-11). dotnet8 is not offered: its deprecation is listed as
+  # 2026-11-10, under a month away, and Lambda already withholds runtimes due within six months
+  # from new regions. provided.al2023 stays as the OS-only alternative; it needs a self-contained
+  # bootstrap executable, which the current DocIntake.Lambda zip is not.
   LambdaRuntime:
     Type: String
-    Default: provided.al2023
-    AllowedValues: [provided.al2023, dotnet8]
+    Default: dotnet10
+    AllowedValues: [dotnet10, provided.al2023]
     Description: >-
-      Lambda runtime. provided.al2023 carries a self-contained publish; a managed .NET runtime is
-      used instead if the migrated version has one (confirmed in task 5.1).
+      Lambda runtime. dotnet10 runs the framework-dependent DocIntake.Lambda zip; provided.al2023
+      needs a self-contained bootstrap build instead.
 
   FileSystemIdentityUser:
     Type: String
     Default: APPMOD\appsvc
     Description: The WINDOWS-type AD user the S3 Access Point maps the Lambda caller to.
-
-  VpcId:
-    Type: AWS::EC2::VPC::Id
-    Description: The VPC the S3 Access Point restricts requests to (NetworkOrigin VPC; immutable).
 
 Conditions:
   UseImportedBucket: !Equals [!Ref ArtifactsBucketName, '']
@@ -128,6 +127,8 @@ Resources:
               # point issues). The ARN is the attachment's S3AccessPoint.ResourceARN attribute.
               # ListBucket is granted on the access point ARN, object reads and writes under
               # /object/*. The cfn-guard rule s3_scoped_resource fails if '*' returns here.
+              # s3:DeleteObject is not granted: no stage-3 code path deletes (the Probe's S3 variant
+              # records acl-evaluation by a real PutObject and does not call CanWrite).
               - Sid: AppDataAccessPointList
                 Effect: Allow
                 Action: s3:ListBucket
@@ -162,6 +163,25 @@ Resources:
                           'Fn::Sub': '${BaseStackName}-ArtifactsBucket'
                         - !Ref ArtifactsBucketName
 
+  # The Lambda ENIs' own security group: no inbound rule, egress HTTPS only. The function talks to
+  # the S3 Access Point and the artifacts bucket through the base stack's S3 gateway endpoint, both
+  # on 443; it opens no SMB or NFS connection to the SVM. The destination stays 0.0.0.0/0 because a
+  # template cannot portably reference the S3 prefix list, as on the base stack's client group.
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Stage-3 Lambda ENIs. No inbound rules; HTTPS egress only.
+      VpcId: !ImportValue
+        'Fn::Sub': '${BaseStackName}-VpcId'
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: >-
+            HTTPS to the S3 Access Point and the artifacts bucket via the S3 gateway endpoint.
+            NARROW to the S3 prefix list in production.
+
   WorkerFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -180,16 +200,27 @@ Resources:
         S3Key: !Ref LambdaPackageKey
       VpcConfig:
         SubnetIds:
-          - !Ref PrimarySubnetId
+          - !ImportValue
+            'Fn::Sub': '${BaseStackName}-PrimarySubnetId'
         SecurityGroupIds:
-          - !Ref LambdaSecurityGroupId
+          - !Ref LambdaSecurityGroup
+      # S3_ACCESS_POINT_ARN is passed to the SDK as the bucket argument (data operations accept the
+      # access point ARN or alias). ARTIFACTS_BUCKET receives probe/<run-id>/lambda-s3.json.
       Environment:
         Variables:
           STORE: s3
           FS_IDENTITY: !Ref FileSystemIdentityUser
+          S3_ACCESS_POINT_ARN: !GetAtt AppDataS3AccessPoint.S3AccessPoint.ResourceARN
+          ARTIFACTS_BUCKET: !If
+            - UseImportedBucket
+            - !ImportValue
+              'Fn::Sub': '${BaseStackName}-ArtifactsBucket'
+            - !Ref ArtifactsBucketName
     DependsOn: LambdaLogGroup
 
-  # Poll the inbox on a schedule, because the S3 Access Point emits no S3 event notification.
+  # A poll, because the S3 Access Point emits no S3 event notification. Created DISABLED: the
+  # measurement runs invoke the function by hand. To run the poll, update the schedule with
+  # --state ENABLED (aws scheduler update-schedule needs the full definition, as teardown.sh does).
   WorkerSchedule:
     Type: AWS::Scheduler::Schedule
     Properties:
@@ -197,7 +228,7 @@ Resources:
       FlexibleTimeWindow:
         Mode: 'OFF'
       ScheduleExpression: 'rate(5 minutes)'
-      State: ENABLED
+      State: DISABLED
       Target:
         Arn: !GetAtt WorkerFunction.Arn
         RoleArn: !GetAtt SchedulerRole.Arn
@@ -241,7 +272,8 @@ Resources:
             Name: !Ref FileSystemIdentityUser
       S3AccessPoint:
         VpcConfiguration:
-          VpcId: !Ref VpcId
+          VpcId: !ImportValue
+            'Fn::Sub': '${BaseStackName}-VpcId'
 
 Outputs:
   WorkerFunctionArn:
@@ -249,5 +281,5 @@ Outputs:
     Value: !GetAtt WorkerFunction.Arn
 
   ScheduleName:
-    Description: The EventBridge Scheduler schedule that polls the inbox.
+    Description: The EventBridge Scheduler schedule that polls the inbox (created DISABLED).
     Value: !Ref WorkerSchedule
