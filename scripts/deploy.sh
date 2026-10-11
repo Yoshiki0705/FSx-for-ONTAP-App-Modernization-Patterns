@@ -86,11 +86,11 @@ resolve_account_id() {
 # deployed with template defaults, because the base.yaml CIDR defaults collide with existing VPCs in
 # the shared account. Prints one "ParameterKey=...,ParameterValue=..." token per recorded parameter.
 #
-# stage3 is a separate case: its required parameters (PrimarySubnetId, LambdaSecurityGroupId, VpcId)
-# are resource IDs that only exist once the base stack has been created, and the Lambda package key
-# and handler are decided in a later task (5.1 / 5.2). estimate.py does not record a stage3
-# parameters object, and deploy.sh does not resolve or require one for stage3 — stage3 deploy-time
-# parameter passing is deferred to that later task, not refused here.
+# stage3 follows the same rule. estimate.py --target stage3 records the stage-3 parameters
+# (BaseStackName, LambdaPackageKey, LambdaHandler, LambdaRuntime, FileSystemIdentityUser, and
+# ArtifactsBucketName when overridden); the VPC, subnet, and security group are no longer
+# parameters (the template imports the first two from the base stack and creates its own group).
+# A stage3 estimate without a parameters object is refused exactly like base.
 read_estimate_parameters() {
   local estimate_file="$1"
   APPMOD_DP_ESTIMATE="$estimate_file" python3 - <<'PY'
@@ -183,40 +183,38 @@ case "$TARGET" in
     ;;
 esac
 
-# Resolve the approved CloudFormation parameters from the estimate before the create call. This is
-# base-only: for base, a missing parameters object exits 2 here (read_estimate_parameters), so an
-# older estimate never reaches create-stack with template defaults. For stage3 the parameters come
-# from the base stack's resource IDs and a later task, so none are resolved from the estimate (see
-# the comment on read_estimate_parameters); the array stays empty and no --parameters is passed.
+# Resolve the approved CloudFormation parameters from the estimate before the create call, for both
+# targets: a missing or empty parameters object exits 2 here (read_estimate_parameters), so an older
+# estimate never reaches create-stack with template defaults.
 PARAMETERS=()
-if [ "$TARGET" = "base" ]; then
-  # Read into a variable first and check the status: a process substitution's exit status is never
-  # checked, so a reader that printed some tokens and then refused a malformed entry (exit 2) would
-  # otherwise deploy with the tokens printed so far and template defaults for the rest.
-  if ! TOKENS="$(read_estimate_parameters "$ESTIMATE")"; then
-    echo "deploy: the estimate's parameters were refused; not deploying" >&2
-    exit 2
-  fi
-  while IFS= read -r token; do
-    [ -n "$token" ] && PARAMETERS+=("$token")
-  done <<EOF
+# Read into a variable first and check the status: a process substitution's exit status is never
+# checked, so a reader that printed some tokens and then refused a malformed entry (exit 2) would
+# otherwise deploy with the tokens printed so far and template defaults for the rest.
+if ! TOKENS="$(read_estimate_parameters "$ESTIMATE")"; then
+  echo "deploy: the estimate's parameters were refused; not deploying" >&2
+  exit 2
+fi
+while IFS= read -r token; do
+  [ -n "$token" ] && PARAMETERS+=("$token")
+done <<EOF
 $TOKENS
 EOF
-  if [ "${#PARAMETERS[@]}" -eq 0 ]; then
-    echo "deploy: no deployable parameters resolved from estimate; not deploying" >&2
-    exit 2
-  fi
+if [ "${#PARAMETERS[@]}" -eq 0 ]; then
+  echo "deploy: no deployable parameters resolved from estimate; not deploying" >&2
+  exit 2
+fi
+if [ "$TARGET" = "base" ]; then
   # The PARAMETERS array is now fully built, so an estimate that overrode AdAdminSecretName /
   # FsxAdminSecretName is honored. Verify the two base-stack secrets exist before any upload or
-  # create; a missing secret exits 2 here with the estimate still unused.
+  # create; a missing secret exits 2 here with the estimate still unused. stage3 resolves no secret.
   precheck_base_secrets
 fi
 
 # How the template bytes reach create-stack. base.yaml (52,466 bytes) is over CloudFormation's
 # 51,200-byte inline --template-body limit, so a base create with --template-body fails with a
 # ValidationError before creating anything. base uploads the template to a dedicated, in-region
-# deploy bucket and passes --template-url. stage3-serverless.yaml (9,542 bytes) is under the limit
-# and stays on --template-body unchanged. The deploy bucket is distinct from the stack's
+# deploy bucket and passes --template-url. stage3-serverless.yaml (11,923 bytes) is under the limit
+# and stays on --template-body. The deploy bucket is distinct from the stack's
 # ArtifactsBucket (which the base stack creates, so it cannot hold the template before the stack
 # exists) and is left in place across rebuilds; teardown.sh does not touch it.
 TEMPLATE_ARG=(--template-body "file://$TEMPLATE")
@@ -253,21 +251,13 @@ fi
 echo "deploy: creating $STACK from $TEMPLATE in $REGION"
 # --on-failure DELETE so a failed base create does not leave half a stack billing; appdata is
 # DeletionPolicy Retain, so teardown.sh --after-failed-create handles a retained volume afterwards.
-# base passes --parameters from the approved estimate; stage3 passes none (deferred).
-if [ "${#PARAMETERS[@]}" -gt 0 ]; then
-  run_aws cloudformation create-stack \
-    --stack-name "$STACK" \
-    "${TEMPLATE_ARG[@]}" \
-    --capabilities CAPABILITY_NAMED_IAM \
-    --on-failure DELETE \
-    --parameters "${PARAMETERS[@]}"
-else
-  run_aws cloudformation create-stack \
-    --stack-name "$STACK" \
-    "${TEMPLATE_ARG[@]}" \
-    --capabilities CAPABILITY_NAMED_IAM \
-    --on-failure DELETE
-fi
+# Both targets pass --parameters from the approved estimate (PARAMETERS is never empty here).
+run_aws cloudformation create-stack \
+  --stack-name "$STACK" \
+  "${TEMPLATE_ARG[@]}" \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --on-failure DELETE \
+  --parameters "${PARAMETERS[@]}"
 
 # Move the estimate to used/ so it cannot be reused.
 mkdir -p "$ESTIMATES_DIR/used"

@@ -18,6 +18,10 @@ Three jobs, selected by flags:
                  N x the agent-minute unit price. For AWS/dotnet-modernization the expected charge
                  within the account's monthly no-cost quota is recorded separately as $0, with the
                  caveat that this script cannot observe how much of the quota is left.
+                 --target stage3 prices only the add-on stack (Lambda requests and GB-seconds for
+                 --invocations manual runs at the template's memory and timeout ceiling, S3 Access
+                 Point requests, CloudWatch Logs, and a $0 DISABLED schedule) and records the
+                 stage-3 deploy parameters, which deploy.sh stage3 passes to create-stack.
   --elapsed      Compute the elapsed fraction of the approved base time from approval.json and
                  return exit 3 when it exceeds 80%. The origin is always the base approval time; atx
                  / stage3 / teardown / base-update approvals do not move it, extend hours add to the
@@ -95,6 +99,54 @@ DOTNET_EXPECTED_CAVEAT = (
     "if the quota is exhausted the ceiling applies"
 )
 LIMIT_MINUTES_PATTERN = re.compile(r"^[1-9][0-9]*$")
+
+# --target stage3 prices only what appmod-stage3 adds to the running base environment; the base
+# environment's hours are already covered by the base (and extend) estimates. The stage-3 deploy
+# parameters are recorded like base's, and deploy.sh stage3 passes exactly those. The defaults
+# below equal the Default values in templates/stage3-serverless.yaml (test_estimate.py fails when
+# they diverge); the VPC, subnet, and security group are not parameters (the template imports the
+# first two and creates the third).
+STAGE3_DEFAULTS = {
+    "BaseStackName": "appmod-base",
+    "LambdaPackageKey": "lambda/worker.zip",
+    "LambdaHandler": "DocIntake.Lambda::DocIntake.Lambda.Function::Handler",
+    "LambdaRuntime": "dotnet10",
+    "FileSystemIdentityUser": "APPMOD\\appsvc",
+}
+# The template's LambdaRuntime AllowedValues.
+STAGE3_RUNTIMES = ("dotnet10", "provided.al2023")
+# The template's WorkerFunction MemorySize (MiB) and Timeout (s): the per-invocation duration
+# ceiling the GB-second line is priced at.
+STAGE3_MEMORY_MB = 512
+STAGE3_TIMEOUT_S = 120
+# Manual `aws lambda invoke` runs priced when --invocations is not given. The schedule is created
+# DISABLED, so these are the only invocations.
+STAGE3_DEFAULT_INVOCATIONS = 20
+STAGE3_MAX_INVOCATIONS = 10000
+# Stated ceilings, not measurements: S3 requests per invocation (Worker: list, a read and a write per
+# inbox document, the index write and read-back; Probe: about ten) and log bytes per invocation.
+STAGE3_S3AP_REQUESTS_PER_INVOCATION = 100
+STAGE3_LOG_MIB_PER_INVOCATION = 1
+# The FSx for ONTAP pricing page says S3 requests through S3 Access Points are billed, but publishes
+# no per-request unit, and the AmazonFSx Price List in ap-northeast-1 has no S3 Access Point request
+# usagetype (its Request family holds only the capacity-pool CPoolStdRd / CPoolStdWr rates). Both
+# checked 2026-10-11. Unless a fsx_s3ap_request price is supplied, the line is "not retrieved".
+FSX_S3AP_REQUEST_SOURCE = (
+    "https://aws.amazon.com/fsx/netapp-ontap/pricing/ (read 2026-10-11, re-read 2026-10-12): S3 "
+    "requests through S3 Access Points are billed, but no per-request unit is published; the "
+    "AmazonFSx Price List has no S3 Access Point request usagetype for ap-northeast-1 (checked "
+    "2026-10-11): no distinct Price List key found"
+)
+S3_DATA_TRANSFER_NOTE = (
+    "not priced here: data transfer through an S3 Access Point follows Amazon S3 data-transfer "
+    "pricing (https://aws.amazon.com/fsx/netapp-ontap/pricing/, read 2026-10-11)"
+)
+STACK_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,127}$")
+PACKAGE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,1000}\.zip$")
+HANDLER_PATTERN = re.compile(r"^[A-Za-z0-9_.:]{1,128}$")
+IDENTITY_USER_PATTERN = re.compile(r"^([A-Za-z0-9._-]{1,15}\\)?[A-Za-z0-9._-]{1,20}$")
+BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+INVOCATIONS_PATTERN = re.compile(r"^[1-9][0-9]*$")
 
 
 class InputError(ValueError):
@@ -285,6 +337,11 @@ def validate_target_args(args: argparse.Namespace) -> None:
             raise InputError("--egress-mode is required for --target base")
         if args.egress_mode not in ("nat", "endpoints"):
             raise InputError("--egress-mode must be nat or endpoints")
+    if args.target != "stage3":
+        # Same reasoning as the atx flags below: a stage-3 flag on another target would do nothing.
+        for flag, attr in STAGE3_FLAGS:
+            if getattr(args, attr, None) is not None:
+                raise InputError(f"{flag} applies only to --target stage3")
     transformation = getattr(args, "transformation", None)
     limit_minutes = getattr(args, "limit_minutes", None)
     if args.target == "atx":
@@ -329,6 +386,75 @@ def build_atx_parameters(args: argparse.Namespace) -> list[dict[str, str]]:
     ]
 
 
+STAGE3_FLAGS = (
+    ("--base-stack-name", "base_stack_name"),
+    ("--lambda-package-key", "lambda_package_key"),
+    ("--lambda-handler", "lambda_handler"),
+    ("--lambda-runtime", "lambda_runtime"),
+    ("--file-system-identity-user", "file_system_identity_user"),
+    ("--artifacts-bucket-name", "artifacts_bucket_name"),
+    ("--invocations", "invocations"),
+)
+
+
+def stage3_invocations(args: argparse.Namespace) -> int:
+    """Return the number of manual invocations to price. Raises InputError (exit 2)."""
+    value = getattr(args, "invocations", None)
+    if value is None:
+        return STAGE3_DEFAULT_INVOCATIONS
+    if not INVOCATIONS_PATTERN.fullmatch(value) or int(value) > STAGE3_MAX_INVOCATIONS:
+        raise InputError(
+            f"--invocations must be an integer from 1 to {STAGE3_MAX_INVOCATIONS} "
+            f"(got {value!r})"
+        )
+    return int(value)
+
+
+def build_stage3_parameters(args: argparse.Namespace) -> list[dict[str, str]]:
+    """Return the CloudFormation parameters for a stage3 deploy as ParameterKey/Value pairs.
+
+    BaseStackName, LambdaPackageKey, LambdaHandler, LambdaRuntime, and FileSystemIdentityUser are
+    always recorded (the approval shows the file-system identity the access point maps to);
+    ArtifactsBucketName only when given, since the template's empty default imports the base
+    stack's bucket. No value may contain a comma: deploy.sh passes the pairs in the CLI shorthand
+    ParameterKey=<k>,ParameterValue=<v>. Raises InputError (exit 2) on any violation.
+    """
+
+    def value(attr: str, key: str) -> str:
+        given = getattr(args, attr, None)
+        text = STAGE3_DEFAULTS[key] if given is None else given.strip()
+        if not text:
+            raise InputError(f"{key} must not be empty")
+        return text
+
+    checks = (
+        ("base_stack_name", "BaseStackName", STACK_NAME_PATTERN),
+        ("lambda_package_key", "LambdaPackageKey", PACKAGE_KEY_PATTERN),
+        ("lambda_handler", "LambdaHandler", HANDLER_PATTERN),
+        ("lambda_runtime", "LambdaRuntime", None),
+        ("file_system_identity_user", "FileSystemIdentityUser", IDENTITY_USER_PATTERN),
+    )
+    params: list[dict[str, str]] = []
+    for attr, key, pattern in checks:
+        text = value(attr, key)
+        if key == "LambdaRuntime":
+            if text not in STAGE3_RUNTIMES:
+                raise InputError(
+                    f"--lambda-runtime must be one of {', '.join(STAGE3_RUNTIMES)} (got {text!r})"
+                )
+        elif not pattern.fullmatch(text) or ".." in text:
+            raise InputError(f"{key} is not well-formed: {text!r}")
+        params.append({"ParameterKey": key, "ParameterValue": text})
+
+    bucket = getattr(args, "artifacts_bucket_name", None)
+    if bucket is not None:
+        text = bucket.strip()
+        if not BUCKET_NAME_PATTERN.fullmatch(text) or ".." in text:
+            raise InputError(f"ArtifactsBucketName is not well-formed: {text!r}")
+        params.append({"ParameterKey": "ArtifactsBucketName", "ParameterValue": text})
+    return params
+
+
 def load_prices(fixture: Path | None) -> dict[str, float] | None:
     """Return a mapping of price keys to unit prices, or None if unavailable.
 
@@ -354,6 +480,90 @@ def load_minimums(fixture: Path | None) -> dict[str, int] | None:
     return None
 
 
+def stage3_line_items(
+    prices: dict[str, float], invocations: int
+) -> list[dict[str, object]]:
+    """Return the stage-3 add-on line items: usage ceilings for `invocations` manual runs.
+
+    Price keys and their Price List source (ap-northeast-1, OnDemand):
+      lambda_request    AWSLambda, usagetype APN1-Request (per request)
+      lambda_gb_second  AWSLambda, usagetype APN1-Lambda-GB-Second, first tier (x86_64)
+      cwl_ingest_gb     AmazonCloudWatch, usagetype APN1-DataProcessing-Bytes (Standard log class)
+      fsx_s3ap_request  no Price List key found (FSX_S3AP_REQUEST_SOURCE); "not retrieved" unless
+                        supplied
+    The Lambda free tier is not applied. The base environment is not re-priced here.
+    """
+    gb_seconds = invocations * (STAGE3_MEMORY_MB / 1024) * STAGE3_TIMEOUT_S
+    s3ap_requests = invocations * STAGE3_S3AP_REQUESTS_PER_INVOCATION
+    log_gb = invocations * STAGE3_LOG_MIB_PER_INVOCATION / 1024
+
+    def usage(
+        label: str, key: str, quantity: float, unit: str, **extra: object
+    ) -> dict:
+        price = prices.get(key)
+        item: dict[str, object] = {
+            "label": label,
+            "unit_usd": price,
+            "quantity": quantity,
+            "unit": unit,
+            "hours": 0,
+            # Six places: a few manual runs cost fractions of a cent, which two places would hide.
+            "subtotal_usd": None if price is None else round(price * quantity, 6),
+            "note": "not retrieved" if price is None else "",
+        }
+        item.update(extra)
+        return item
+
+    return [
+        usage(
+            f"AWS Lambda requests (ceiling, {invocations} manual invocations)",
+            "lambda_request",
+            invocations,
+            "requests",
+        ),
+        usage(
+            f"AWS Lambda duration (ceiling, {invocations} x {STAGE3_MEMORY_MB} MiB x "
+            f"{STAGE3_TIMEOUT_S} s)",
+            "lambda_gb_second",
+            gb_seconds,
+            "GB-seconds",
+        ),
+        usage(
+            f"FSx for ONTAP S3 Access Points requests (ceiling, "
+            f"{STAGE3_S3AP_REQUESTS_PER_INVOCATION} per invocation, assumed)",
+            "fsx_s3ap_request",
+            s3ap_requests,
+            "requests",
+            source=FSX_S3AP_REQUEST_SOURCE,
+        ),
+        usage(
+            f"Amazon CloudWatch Logs ingestion (ceiling, {STAGE3_LOG_MIB_PER_INVOCATION} MiB "
+            "per invocation, assumed)",
+            "cwl_ingest_gb",
+            round(log_gb, 6),
+            "GB",
+        ),
+        {
+            "label": "Amazon EventBridge Scheduler (schedule created DISABLED)",
+            "unit_usd": 0.0,
+            "quantity": 0,
+            "unit": "invocations",
+            "hours": 0,
+            "subtotal_usd": 0.0,
+            "note": "the schedule is DISABLED, so it invokes nothing; manual runs are priced above",
+        },
+        {
+            "label": "S3 data transfer through the S3 Access Point",
+            "unit_usd": None,
+            "quantity": None,
+            "unit": "GB",
+            "hours": 0,
+            "subtotal_usd": None,
+            "note": S3_DATA_TRANSFER_NOTE,
+        },
+    ]
+
+
 def build_line_items(
     prices: dict[str, float],
     target: str,
@@ -361,9 +571,13 @@ def build_line_items(
     egress_mode: str | None,
     transformation: str | None = None,
     limit_minutes: int | None = None,
+    invocations: int = STAGE3_DEFAULT_INVOCATIONS,
 ) -> list[dict[str, object]]:
     """Return estimate line items. A missing price is recorded as not-retrieved, never guessed."""
     items: list[dict[str, object]] = []
+
+    if target == "stage3":
+        return stage3_line_items(prices, invocations)
 
     if target == "atx" and limit_minutes is not None:
         # The ceiling: atx stops (exit 2) once the run has used limit_minutes agent minutes.
@@ -414,7 +628,7 @@ def build_line_items(
             }
         )
 
-    if target in ("base", "stage3", "extend"):
+    if target in ("base", "extend"):
         add(
             "FSx for ONTAP SSD (1,024 GiB)",
             monthly_to_hourly("fsx_ssd_gb_month", FIXED_STORAGE_GIB),
@@ -468,6 +682,7 @@ def write_estimate(
     # and passes exactly these to create-stack; an estimate without it is refused rather than
     # deployed with template defaults.
     # For atx the same object carries Transformation and LimitMinutes, which run-atx.sh reads.
+    # For stage3 it carries the stage-3 template parameters, which deploy.sh stage3 passes.
     if parameters is not None:
         payload["parameters"] = parameters
         pairs = {p["ParameterKey"]: p["ParameterValue"] for p in parameters}
@@ -550,11 +765,16 @@ def cmd_target(args: argparse.Namespace) -> int:
         # For base, resolve the deployment configuration into CloudFormation parameters before any
         # price is fetched, so an invalid configuration fails (exit 2) without a billed lookup.
         # atx records its transformation and agent-minute limit the same way.
+        # stage3 records its deploy parameters the same way, and deploy.sh stage3 passes them.
         parameters = None
+        invocations = STAGE3_DEFAULT_INVOCATIONS
         if args.target == "base":
             parameters = build_base_parameters(args)
         elif args.target == "atx":
             parameters = build_atx_parameters(args)
+        elif args.target == "stage3":
+            parameters = build_stage3_parameters(args)
+            invocations = stage3_invocations(args)
     except InputError as exc:
         print(f"estimate: {exc}", file=sys.stderr)
         return 2
@@ -601,6 +821,7 @@ def cmd_target(args: argparse.Namespace) -> int:
         args.egress_mode,
         transformation=args.transformation,
         limit_minutes=int(args.limit_minutes) if args.limit_minutes else None,
+        invocations=invocations,
     )
     path = write_estimate(
         args.target, hours, args.egress_mode, items, minimum_mismatch, parameters
@@ -657,6 +878,20 @@ def build_parser() -> argparse.ArgumentParser:
     atx = parser.add_argument_group("atx run configuration (--target atx)")
     atx.add_argument("--transformation")
     atx.add_argument("--limit-minutes")
+
+    # --target stage3 deployment configuration. Unset flags take STAGE3_DEFAULTS (the template's
+    # Default values); every flag is refused on other targets. --invocations is parsed as a string
+    # and validated, like --limit-minutes.
+    stage3 = parser.add_argument_group(
+        "stage3 deployment configuration (--target stage3)"
+    )
+    stage3.add_argument("--base-stack-name")
+    stage3.add_argument("--lambda-package-key")
+    stage3.add_argument("--lambda-handler")
+    stage3.add_argument("--lambda-runtime")
+    stage3.add_argument("--file-system-identity-user")
+    stage3.add_argument("--artifacts-bucket-name")
+    stage3.add_argument("--invocations")
 
     parser.add_argument(
         "--price-fixture", help="JSON of unit prices (tests only; no live call)"

@@ -7,5 +7,8 @@
   "ebs_gp3_gb_month": 0.096,
   "vpce_interface_az_hour": 0.014,
   "secrets_manager_secret_month": 0.40,
-  "transform_agent_minute": 0.035
+  "transform_agent_minute": 0.035,
+  "lambda_request": 0.0000002,
+  "lambda_gb_second": 0.0000166667,
+  "cwl_ingest_gb": 0.76
 }

@@ -6,7 +6,9 @@ validation exit codes, the --elapsed 79% / 81% / no-record cases including "atx 
 move the origin", the --target base minimum recheck (exit 4 on mismatch, exit 0 on match), and
 --target atx: --transformation / --limit-minutes required and allow-listed (exit 2 otherwise),
 refused on other targets, recorded as parameters, and priced as the ceiling N x unit price, with
-an expected $0 inside the AWS/dotnet-modernization quota.
+an expected $0 inside the AWS/dotnet-modernization quota. --target stage3: add-on line items only,
+the S3 Access Point request charge "not retrieved" without a unit, stage-3 parameters recorded with
+the template's defaults, and bad stage-3 inputs refused.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -311,6 +314,211 @@ class AtxEstimateTests(unittest.TestCase):
             [*self.ANALYSIS, "--limit-minutes", "120"], price_fixture=None
         )
         self.assertEqual(code, 1)
+
+
+class Stage3EstimateTests(unittest.TestCase):
+    """--target stage3 prices only the add-on and records the stage-3 deploy parameters."""
+
+    TEMPLATE = SCRIPTS.parent / "templates" / "stage3-serverless.yaml"
+
+    def _run_stage3(
+        self, extra: list[str], price_fixture: Path | None = FIXTURES / "prices.json"
+    ) -> tuple[int, dict | None]:
+        with tempfile.TemporaryDirectory() as d:
+            orig = estimate.ESTIMATES_DIR
+            estimate.ESTIMATES_DIR = Path(d) / "estimates"
+            argv = ["--target", "stage3", "--hours", "4", *extra]
+            if price_fixture is not None:
+                argv += ["--price-fixture", str(price_fixture)]
+            try:
+                code = estimate.main(argv)
+                written = sorted(estimate.ESTIMATES_DIR.glob("*.json"))
+                payload = (
+                    json.loads(written[0].read_text(encoding="utf-8"))
+                    if written
+                    else None
+                )
+            finally:
+                estimate.ESTIMATES_DIR = orig
+            return code, payload
+
+    @staticmethod
+    def _item(payload: dict, prefix: str) -> dict:
+        return next(i for i in payload["line_items"] if i["label"].startswith(prefix))
+
+    def test_line_items_are_the_add_on_only(self) -> None:
+        code, payload = self._run_stage3([])
+        self.assertEqual(code, 0)
+        labels = [i["label"] for i in payload["line_items"]]
+        for base_label in (
+            "FSx for ONTAP SSD",
+            "FSx for ONTAP throughput",
+            "AWS Managed Microsoft AD",
+            "Windows EC2",
+            "Linux EC2",
+        ):
+            self.assertFalse(
+                any(label.startswith(base_label) for label in labels),
+                f"stage3 must not re-price the base environment ({base_label})",
+            )
+        for add_on in (
+            "AWS Lambda requests",
+            "AWS Lambda duration",
+            "FSx for ONTAP S3 Access Points requests",
+            "Amazon CloudWatch Logs ingestion",
+            "Amazon EventBridge Scheduler",
+        ):
+            self.assertTrue(any(label.startswith(add_on) for label in labels), add_on)
+
+    def test_lambda_subtotals_compute_from_the_fixture(self) -> None:
+        code, payload = self._run_stage3(["--invocations", "20"])
+        self.assertEqual(code, 0)
+        requests = self._item(payload, "AWS Lambda requests")
+        self.assertEqual(requests["quantity"], 20)
+        self.assertAlmostEqual(requests["subtotal_usd"], 20 * 0.0000002, places=9)
+        duration = self._item(payload, "AWS Lambda duration")
+        # 20 invocations x 0.5 GB (512 MiB) x 120 s = 1,200 GB-seconds.
+        self.assertAlmostEqual(duration["quantity"], 1200.0)
+        self.assertAlmostEqual(duration["subtotal_usd"], 1200 * 0.0000166667, places=6)
+        scheduler = self._item(payload, "Amazon EventBridge Scheduler")
+        self.assertEqual(scheduler["subtotal_usd"], 0.0)
+        self.assertIn("DISABLED", scheduler["label"])
+
+    def test_s3_access_point_requests_are_not_retrieved_without_a_unit(self) -> None:
+        # The shipped fixture, like the live Price List, has no fsx_s3ap_request price.
+        code, payload = self._run_stage3([])
+        self.assertEqual(code, 0)
+        item = self._item(payload, "FSx for ONTAP S3 Access Points requests")
+        self.assertEqual(item["note"], "not retrieved")
+        self.assertIsNone(item["subtotal_usd"])
+        self.assertIsNone(item["unit_usd"])
+        self.assertIn(
+            "https://aws.amazon.com/fsx/netapp-ontap/pricing/", item["source"]
+        )
+        self.assertIn("2026-10-11", item["source"])
+
+    def test_s3_access_point_requests_price_when_a_unit_is_supplied(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            fixture = Path(d) / "prices.json"
+            prices = json.loads((FIXTURES / "prices.json").read_text(encoding="utf-8"))
+            prices["fsx_s3ap_request"] = 0.000001
+            fixture.write_text(json.dumps(prices), encoding="utf-8")
+            code, payload = self._run_stage3(
+                ["--invocations", "10"], price_fixture=fixture
+            )
+        self.assertEqual(code, 0)
+        item = self._item(payload, "FSx for ONTAP S3 Access Points requests")
+        self.assertEqual(
+            item["quantity"], 10 * estimate.STAGE3_S3AP_REQUESTS_PER_INVOCATION
+        )
+        self.assertAlmostEqual(item["subtotal_usd"], 1000 * 0.000001, places=9)
+        self.assertEqual(item["note"], "")
+
+    def test_missing_lambda_price_is_recorded_not_guessed(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            fixture = Path(d) / "prices.json"
+            fixture.write_text(
+                json.dumps({"lambda_request": 0.0000002}), encoding="utf-8"
+            )
+            code, payload = self._run_stage3([], price_fixture=fixture)
+        self.assertEqual(code, 0)
+        duration = self._item(payload, "AWS Lambda duration")
+        self.assertIsNone(duration["subtotal_usd"])
+        self.assertEqual(duration["note"], "not retrieved")
+
+    def test_parameters_are_recorded_with_template_defaults(self) -> None:
+        code, payload = self._run_stage3([])
+        self.assertEqual(code, 0)
+        pairs = {p["ParameterKey"]: p["ParameterValue"] for p in payload["parameters"]}
+        self.assertEqual(
+            pairs,
+            {
+                "BaseStackName": "appmod-base",
+                "LambdaPackageKey": "lambda/worker.zip",
+                "LambdaHandler": "DocIntake.Lambda::DocIntake.Lambda.Function::Handler",
+                "LambdaRuntime": "dotnet10",
+                "FileSystemIdentityUser": "APPMOD\\appsvc",
+            },
+        )
+        for removed in ("VpcId", "PrimarySubnetId", "LambdaSecurityGroupId"):
+            self.assertNotIn(removed, pairs)
+
+    def test_overrides_are_recorded(self) -> None:
+        code, payload = self._run_stage3(
+            [
+                "--lambda-runtime",
+                "provided.al2023",
+                "--artifacts-bucket-name",
+                "appmod-example-artifacts",
+            ]
+        )
+        self.assertEqual(code, 0)
+        pairs = {p["ParameterKey"]: p["ParameterValue"] for p in payload["parameters"]}
+        self.assertEqual(pairs["LambdaRuntime"], "provided.al2023")
+        self.assertEqual(pairs["ArtifactsBucketName"], "appmod-example-artifacts")
+
+    def test_bad_stage3_inputs_exit_2_without_writing(self) -> None:
+        for extra in (
+            ["--lambda-runtime", "dotnet8"],
+            ["--lambda-handler", "a,b"],
+            ["--lambda-package-key", "../worker.zip"],
+            ["--lambda-package-key", "lambda/worker.tar"],
+            ["--base-stack-name", "1base"],
+            ["--file-system-identity-user", "APPMOD\\app,svc"],
+            ["--artifacts-bucket-name", "Bad_Bucket"],
+            ["--invocations", "0"],
+            ["--invocations", "10001"],
+            ["--invocations", "abc"],
+        ):
+            with self.subTest(extra=extra):
+                code, payload = self._run_stage3(extra)
+                self.assertEqual(code, 2)
+                self.assertIsNone(payload)
+
+    def test_stage3_flags_on_another_target_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            orig = estimate.ESTIMATES_DIR
+            estimate.ESTIMATES_DIR = Path(d) / "estimates"
+            try:
+                code = estimate.main(
+                    [
+                        "--target",
+                        "teardown",
+                        "--invocations",
+                        "5",
+                        "--price-fixture",
+                        str(FIXTURES / "prices.json"),
+                    ]
+                )
+                self.assertEqual(code, 2)
+                self.assertEqual(sorted(estimate.ESTIMATES_DIR.glob("*.json")), [])
+            finally:
+                estimate.ESTIMATES_DIR = orig
+
+    def test_defaults_match_the_template(self) -> None:
+        # Narrow stdlib scan of the template, like the deploy.sh secret-defaults parity check.
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+
+        def default_of(key: str) -> str | None:
+            m = re.search(rf"(?m)^  {re.escape(key)}:\s*$", text)
+            if not m:
+                return None
+            d = re.search(r"(?m)^    Default:\s*(\S+)\s*$", text[m.end() :])
+            return d.group(1) if d else None
+
+        for key, value in estimate.STAGE3_DEFAULTS.items():
+            self.assertEqual(default_of(key), value, key)
+        allowed = re.search(
+            r"(?m)^    AllowedValues:\s*\[([^\]]*)\]",
+            text[text.index("  LambdaRuntime:") :],
+        )
+        self.assertIsNotNone(allowed)
+        self.assertEqual(
+            tuple(v.strip() for v in allowed.group(1).split(",")),
+            estimate.STAGE3_RUNTIMES,
+        )
+        self.assertRegex(text, rf"(?m)^      MemorySize: {estimate.STAGE3_MEMORY_MB}$")
+        self.assertRegex(text, rf"(?m)^      Timeout: {estimate.STAGE3_TIMEOUT_S}$")
 
 
 class ValidationTests(unittest.TestCase):
