@@ -35,7 +35,8 @@ Prices and minimums reach this script through the AWS Price List API in producti
 are supplied as JSON fixtures via --price-fixture and --minimums-fixture, so no test makes a live
 call. When neither a fixture nor a reachable API is available, --target returns exit 1 rather than
 inventing numbers. The atx unit price key is transform_agent_minute (Price List service
-AWSTransform, usagetype APN1-AgentMinute).
+AWSTransform, usagetype APN1-AgentMinute). The stage3 S3 Access Points request keys are read from
+Price List service AmazonS3, usagetypes APN1-Requests-FSXONTAP-Tier1 and -Tier2.
 """
 
 from __future__ import annotations
@@ -128,26 +129,31 @@ STAGE3_MAX_INVOCATIONS = 10000
 # inbox document, the index write and read-back; Probe: about ten) and log bytes per invocation.
 STAGE3_S3AP_REQUESTS_PER_INVOCATION = 100
 STAGE3_LOG_MIB_PER_INVOCATION = 1
-# Unit prices come from the English Amazon FSx for NetApp ONTAP pricing page, tab "S3 Access Points for
-# FSx", read 2026-10-12 (JST). The tab is rendered client-side, so a plain HTTP fetch does not show it.
-# Tokyo (ap-northeast-1): $0.00108 per 1,000 PUT/COPY/POST/LIST requests, $0.000029 per 1,000 GET and
-# all other requests; the page says charges accrue at the same rate as requests made with the API/SDK.
-# Documented (vendor pricing page), one page, one reading. The AWS Price List API (service code
-# AmazonFSx) was NOT checked for a matching SKU: not verified, follow-up. Amazon S3 list prices are
-# higher and are NOT used.
+# Unit prices confirmed by two routes, both read 2026-10-12 (JST), Tokyo (ap-northeast-1):
+#  (1) the English Amazon FSx for NetApp ONTAP pricing page, tab "S3 Access Points for FSx". The tab is
+#      rendered client-side, so a plain HTTP fetch does not show it, and the Japanese page did not show
+#      it on that date.
+#  (2) the AWS Price List API under service code AmazonS3 (not AmazonFSx, which has no S3 Access Points
+#      request SKU in this region): usagetype APN1-Requests-FSXONTAP-Tier1, SKU ZE45RAAH9EX5HNT4,
+#      $0.00108 per 1,000 PUT/COPY/POST/LIST requests; usagetype APN1-Requests-FSXONTAP-Tier2, SKU
+#      W647VRU94Q4WFUS7, $0.000029 per 1,000 GET and all other requests. The sibling usagetypes
+#      APN1-Requests-FSXOPENZFS-Tier1/Tier2 belong to a different product and are not used.
+# Evidence tier: documented (two vendor sources). Nobody has been billed, so it is not verified.
+# Amazon S3 list prices are higher and are NOT used.
 FSX_S3AP_REQUEST_SOURCE = (
-    "Amazon FSx for NetApp ONTAP pricing, English page, tab 'S3 Access Points for FSx', "
-    "https://aws.amazon.com/fsx/netapp-ontap/pricing/ , Asia Pacific (Tokyo) ap-northeast-1, read "
-    "2026-10-12 (JST). Row 'FSx for NetApp ONTAP': $0.00108 per 1,000 PUT/COPY/POST/LIST requests; "
-    "$0.000029 per 1,000 GET and all other requests. The tab is rendered client-side and is not "
-    "visible to a plain HTTP fetch. The Price List API (AmazonFSx) was not checked for a matching "
-    "SKU: not verified. Amazon S3 list prices are higher and were not used"
+    "AWS Price List API, service code AmazonS3, usagetype APN1-Requests-FSXONTAP-Tier1/Tier2, "
+    "SKU ZE45RAAH9EX5HNT4/W647VRU94Q4WFUS7, read 2026-10-12; matches the FSx for ONTAP pricing page "
+    "tab 'S3 Access Points for FSx' (https://aws.amazon.com/fsx/netapp-ontap/pricing/ , English page, "
+    "Asia Pacific (Tokyo) ap-northeast-1). Tier1: $0.00108 per 1,000 PUT/COPY/POST/LIST requests; "
+    "Tier2: $0.000029 per 1,000 GET and all other requests. The pricing page tab is rendered "
+    "client-side and is not visible to a plain HTTP fetch. Amazon S3 list prices are higher and were "
+    "not used"
 )
 S3AP_REQUEST_CEILING_NOTE = (
     "upper bound: every assumed request is priced at the PUT/COPY/POST/LIST rate "
     "(fsx_s3ap_put_list_request); the GET and all-other rate (fsx_s3ap_get_request) is lower and "
-    "shown on the next line for reference only. Documented on one pricing page, read 2026-10-12; "
-    "not confirmed billing"
+    "shown on the next line for reference only. Documented by the pricing page and the Price List "
+    "API, read 2026-10-12; not confirmed billing"
 )
 S3_DATA_TRANSFER_NOTE = (
     "not included in the total: data transfer through an S3 Access Point is billed as for an S3 "
@@ -473,11 +479,16 @@ def load_prices(fixture: Path | None) -> dict[str, float] | None:
 
     In production this would call the AWS Price List API (the pricing endpoint is us-east-1). Here it
     is read from a fixture in tests. Returning None signals 'API unreachable' and causes exit 1; it
-    never falls back to remembered values.
+    never falls back to remembered values. A fixture key that starts with "_" (for example
+    "_sources", which records where a price was read) is metadata and is not a price.
     """
     if fixture is not None:
         data = json.loads(fixture.read_text(encoding="utf-8"))
-        return {str(k): float(v) if v is not None else None for k, v in data.items()}
+        return {
+            str(k): float(v) if v is not None else None
+            for k, v in data.items()
+            if not str(k).startswith("_")
+        }
     # No live call is made here; a caller without a fixture is treated as unreachable.
     return None
 
@@ -502,11 +513,13 @@ def stage3_line_items(
       lambda_request    AWSLambda, usagetype APN1-Request (per request)
       lambda_gb_second  AWSLambda, usagetype APN1-Lambda-GB-Second, first tier (x86_64)
       cwl_ingest_gb     AmazonCloudWatch, usagetype APN1-DataProcessing-Bytes (Standard log class)
-      fsx_s3ap_put_list_request  FSx for ONTAP pricing page, tab "S3 Access Points for FSx"
-                        (FSX_S3AP_REQUEST_SOURCE), per request: PUT/COPY/POST/LIST. Prices every
-                        assumed S3 Access Points request, as an upper bound
-      fsx_s3ap_get_request  same tab, per request: GET and all other requests. Reference line
-                        only, not in the total
+      fsx_s3ap_put_list_request  AmazonS3, usagetype APN1-Requests-FSXONTAP-Tier1 (SKU
+                        ZE45RAAH9EX5HNT4); same value as the FSx for ONTAP pricing page tab "S3 Access
+                        Points for FSx" (FSX_S3AP_REQUEST_SOURCE), per request: PUT/COPY/POST/LIST.
+                        Prices every assumed S3 Access Points request, as an upper bound
+      fsx_s3ap_get_request  AmazonS3, usagetype APN1-Requests-FSXONTAP-Tier2 (SKU W647VRU94Q4WFUS7),
+                        per request: GET and all other requests. Reference line only, not in the
+                        total
       A price key that is absent is recorded as "not retrieved" with a null subtotal, never
       defaulted.
     The Lambda free tier is not applied. The base environment is not re-priced here.
