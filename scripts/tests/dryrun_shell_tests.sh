@@ -344,7 +344,7 @@ expect_exit 2 "deploy.sh base wrong region" \
 
 # 7. estimate WITHOUT a parameters object -> refused (exit 2) for base. Fresh, unused, approved,
 # in-region, target-matched, so it passes the entry check and fails only on the missing parameters
-# object. (stage3, below, is deliberately not subject to this gate.)
+# object. (stage3, below, is subject to the same gate.)
 NOPARAMS="$EST_DIR/noparams-base.json"
 cat >"$NOPARAMS" <<EOF
 {"target": "base", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 72}
@@ -359,50 +359,87 @@ PY
 expect_exit 2 "deploy.sh base estimate without parameters object" \
   bash scripts/deploy.sh base --estimate "$NOPARAMS" --approved-at "$APPROVED"
 
-# 8. stage3: the parameters gate is base-only. A stage3 estimate carries no parameters object
-# (its required IDs come from the base stack and a later task, so parameter passing is deferred).
-# deploy.sh stage3 must NOT refuse it on the missing-parameters gate, and the dry-run create line
-# must NOT carry --parameters. Fresh, unused, approved, in-region, target-matched stage3 estimate.
+# 8. stage3: the same parameters gate as base. The stage3 parameters are the ones estimate.py
+# --target stage3 records (built here by estimate.py itself, so the two cannot drift), and the
+# dry-run create line must carry them. Fresh, unused, approved, in-region, target-matched estimates.
+stage3_add_approval() {  # stage3_add_approval <estimate-file>
+  python3 - "$APPROVAL" "$1" "$APPROVED" <<'PY'
+import json,sys
+path,est,approved=sys.argv[1:4]
+data=json.load(open(path))
+data.append({"target":"stage3","approved_at":approved,"hours":4,"estimate_file":est})
+json.dump(data,open(path,"w"))
+PY
+}
+STAGE3_PARAMS_JSON="$(python3 - <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("estimate", "scripts/estimate.py")
+est = importlib.util.module_from_spec(spec)
+sys.modules["estimate"] = est
+spec.loader.exec_module(est)
+args = est.build_parser().parse_args(["--target", "stage3", "--hours", "4"])
+print(json.dumps(est.build_stage3_parameters(args)))
+PY
+)"
 EST_STAGE3="$EST_DIR/case-stage3.json"
 cat >"$EST_STAGE3" <<EOF
-{"target": "stage3", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 24}
+{"target": "stage3", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 4, "parameters": $STAGE3_PARAMS_JSON}
 EOF
-python3 - "$APPROVAL" "$EST_STAGE3" "$APPROVED" <<'PY'
-import json,sys
-path,est,approved=sys.argv[1:4]
-data=json.load(open(path))
-data.append({"target":"stage3","approved_at":approved,"hours":24,"estimate_file":est})
-json.dump(data,open(path,"w"))
-PY
-cp "$EST_STAGE3" "$EST_DIR/case-stage3-run.json"
-python3 - "$APPROVAL" "$EST_DIR/case-stage3-run.json" "$APPROVED" <<'PY'
-import json,sys
-path,est,approved=sys.argv[1:4]
-data=json.load(open(path))
-data.append({"target":"stage3","approved_at":approved,"hours":24,"estimate_file":est})
-json.dump(data,open(path,"w"))
-PY
-expect_exit 0 "deploy.sh stage3 estimate without parameters object (gate is base-only)" \
-  bash scripts/deploy.sh stage3 --estimate "$EST_DIR/case-stage3-run.json" --approved-at "$APPROVED"
+stage3_add_approval "$EST_STAGE3"
+expect_exit 0 "deploy.sh stage3 estimate with a parameters object" \
+  bash scripts/deploy.sh stage3 --estimate "$EST_STAGE3" --approved-at "$APPROVED"
 
 STAGE3_OUT="$(APPMOD_DRY_RUN=1 bash scripts/deploy.sh stage3 \
   --estimate "$EST_STAGE3" --approved-at "$APPROVED" 2>/dev/null)"
-if echo "$STAGE3_OUT" | grep -q "create-stack" \
-  && ! echo "$STAGE3_OUT" | grep -q -- "--parameters"; then
-  echo "ok: deploy.sh stage3 dry-run creates the stack with no --parameters (deferred)"
-else
-  echo "FAIL: deploy.sh stage3 dry-run should create-stack without --parameters" >&2
-  echo "$STAGE3_OUT" >&2
-  FAILURES=$((FAILURES + 1))
-fi
-# stage3-serverless.yaml (9,542 bytes) is under the inline limit and is unchanged: the create still
-# uses --template-body and never --template-url, and no deploy-bucket upload happens for stage3.
+check_contains "deploy.sh stage3 dry-run create-stack carries --parameters" \
+  "--on-failure DELETE --parameters ParameterKey=BaseStackName,ParameterValue=appmod-base" "$STAGE3_OUT"
+check_contains "deploy.sh stage3 dry-run passes the recorded handler" \
+  "ParameterKey=LambdaHandler,ParameterValue=DocIntake.Lambda::DocIntake.Lambda.Function::Handler" "$STAGE3_OUT"
+check_contains "deploy.sh stage3 dry-run passes the recorded runtime" \
+  "ParameterKey=LambdaRuntime,ParameterValue=dotnet10" "$STAGE3_OUT"
+check_contains "deploy.sh stage3 dry-run passes the recorded file-system identity" \
+  'ParameterKey=FileSystemIdentityUser,ParameterValue=APPMOD\appsvc' "$STAGE3_OUT"
+check_absent "deploy.sh stage3 dry-run passes no removed VpcId parameter" \
+  "ParameterKey=VpcId" "$STAGE3_OUT"
+check_absent "deploy.sh stage3 dry-run does not precheck the base-stack secrets" \
+  "describe-secret" "$STAGE3_OUT"
+# stage3-serverless.yaml is under the inline limit: the create uses --template-body and never
+# --template-url, and no deploy-bucket upload happens for stage3.
 check_contains "deploy.sh stage3 dry-run keeps --template-body (under the inline limit)" \
   "create-stack --stack-name appmod-stage3 --template-body file://templates/stage3-serverless.yaml" "$STAGE3_OUT"
 check_absent "deploy.sh stage3 dry-run never uses --template-url" \
   "--template-url" "$STAGE3_OUT"
 check_absent "deploy.sh stage3 dry-run never uploads to the deploy bucket" \
   "s3 cp templates/stage3-serverless.yaml" "$STAGE3_OUT"
+# The --template-body assertions above describe a deployable create only while the template stays
+# under the limit; past it, stage3 needs the base upload path.
+STAGE3_BYTES="$(wc -c <templates/stage3-serverless.yaml | tr -d ' ')"
+if [ "$STAGE3_BYTES" -lt 51200 ]; then
+  echo "ok: stage3-serverless.yaml is $STAGE3_BYTES bytes, under the 51,200-byte --template-body limit"
+else
+  echo "FAIL: stage3-serverless.yaml is $STAGE3_BYTES bytes; route stage3 through --template-url" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 8b/8c. A stage3 estimate WITHOUT a parameters object, or with an empty one, is refused (exit 2)
+# before any create, exactly like base.
+EST_STAGE3_NOPARAMS="$EST_DIR/case-stage3-noparams.json"
+cat >"$EST_STAGE3_NOPARAMS" <<EOF
+{"target": "stage3", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 4}
+EOF
+stage3_add_approval "$EST_STAGE3_NOPARAMS"
+expect_exit 2 "deploy.sh stage3 estimate without parameters object" \
+  bash scripts/deploy.sh stage3 --estimate "$EST_STAGE3_NOPARAMS" --approved-at "$APPROVED"
+EST_STAGE3_EMPTY="$EST_DIR/case-stage3-empty.json"
+cat >"$EST_STAGE3_EMPTY" <<EOF
+{"target": "stage3", "region": "ap-northeast-1", "created_at": "$CREATED", "hours": 4, "parameters": []}
+EOF
+stage3_add_approval "$EST_STAGE3_EMPTY"
+expect_exit 2 "deploy.sh stage3 estimate with an empty parameters object" \
+  bash scripts/deploy.sh stage3 --estimate "$EST_STAGE3_EMPTY" --approved-at "$APPROVED"
+NOPARAMS_OUT="$(APPMOD_DRY_RUN=1 bash scripts/deploy.sh stage3 \
+  --estimate "$EST_STAGE3_NOPARAMS" --approved-at "$APPROVED" 2>&1)"
+check_absent "deploy.sh stage3 refusal happens before create-stack" "create-stack" "$NOPARAMS_OUT"
 
 # --- run-atx.sh: same entry check with target=atx -------------------------------------------------
 # The atx estimate records Transformation and LimitMinutes as estimate.py --target atx writes them;
