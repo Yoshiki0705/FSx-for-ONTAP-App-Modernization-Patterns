@@ -73,23 +73,24 @@ Windows が `FileShare.None` で開いている間の `PutObject` と `GetObject
 |---|---|---|
 | Lambda の要求 | 手動起動の回数（既定 20 回、`--invocations` で指定） | Price List `AWSLambda` の `APN1-Request` |
 | Lambda の実行時間 | 回数 × 0.5 GB × 120 秒の上限 | Price List `AWSLambda` の `APN1-Lambda-GB-Second`（第 1 段の単価） |
-| S3 Access Points の要求 | 1 回あたり 100 件と仮定した上限。すべて PUT/COPY/POST/LIST の単価で計算する | Amazon S3 の Price List `AmazonS3` の `APN1-Requests-Tier1`（SKU XAKHUSC46NWC9PPM）。1,000 件あたり $0.0047、ap-northeast-1、2026-10-12 に確認。適用されるものと仮定している（表の下の補足を参照） |
+| S3 Access Points の要求 | 1 回あたり 100 件と仮定した上限。すべて PUT/COPY/POST/LIST の単価で計算する | Amazon S3 の Price List `AmazonS3` の `APN1-Requests-Tier1`（SKU XAKHUSC46NWC9PPM）。1,000 件あたり $0.0047、ap-northeast-1、2026-10-12 に確認。ページの表示値と一致すると仮定している（表の下の補足を参照） |
 | S3 Access Points の要求（GET の単価） | 同じ件数。参考として示し、合計には含めない | Amazon S3 の Price List `AmazonS3` の `APN1-Requests-Tier2`（SKU 9C7873KU3ZQBD6BJ）。10,000 件あたり $0.0037、ap-northeast-1、2026-10-12 に確認 |
 | CloudWatch Logs の取り込み | 1 回あたり 1 MiB と仮定した上限 | Price List `AmazonCloudWatch` の `APN1-DataProcessing-Bytes` |
 | EventBridge Scheduler | `DISABLED` なので 0 回、$0 | なし |
 | S3 のデータ転送 | 数えない。転送量はオブジェクトの大きさに依存し、見積りは仮定していない | 料金ページによれば、S3 Access Points を通るデータ転送は S3 バケットと同様に課金される |
 
-要求の行は上限であり、仮定の上に立っている。英語版の
-[Amazon FSx for NetApp ONTAP の料金ページ](https://aws.amazon.com/fsx/netapp-ontap/pricing/)（2026-10-12 に確認）は、
-S3 Access Points 経由でデータにアクセスすると S3 の要求に課金されると書いており、課金そのものはある。
-一方でこのページは要求あたりの単価を載せておらず、これらの要求に Amazon S3 Standard の要求単価が適用されるとも
-書いていない。そのため見積りは、上の S3 の単価（ap-northeast-1、オンデマンド、2026-10-12 に確認）を適用すると
-仮定しており、課金が確認されたものではない。Worker と Probe は読み取りと書き込みが混ざり、内訳を測っていないので、
-仮定した要求はすべて単価の高い PUT/COPY/POST/LIST で計算する。GET の単価（1 件 0.00000037 USD）なら同じ
-2,000 件で 0.00074 USD、PUT/LIST の単価では 0.0094 USD になる（20 回 × 100 件。算術であり請求額ではない）。
-`AmazonFSx` の Price List には S3 Access Points の要求の usagetype がない（2026-10-11 に確認）ので、
-単価の出所は S3 の Price List だけである。価格ファイルにキーが欠けている場合、その行は既定値で埋めず、
-小計なしの `not retrieved` として記録する。
+要求の行は上限であり、一点を仮定している。英語版の
+[Amazon FSx for NetApp ONTAP の料金ページ](https://aws.amazon.com/fsx/netapp-ontap/pricing/)（2026-10-12 に確認）には
+「S3 Access Points for FSx」の節があり、S3 Access Points に対する S3 の要求に課金されること、課金は要求の種別 <!-- allow:naming -->
+（PUT/COPY/POST/LIST と、GET およびその他）と件数による 1,000 件あたりの料金であること、API/SDK の要求と同じ料率で
+発生することが書かれている。表の数値はブラウザ側で描画されるため、今回は読んでいない。見積りは、Amazon S3 の
+Price List の値（上の表。ap-northeast-1、オンデマンド、2026-10-12 に確認）を使う。この値がページの表示値と
+一致するかは確認しておらず、仮定である。課金が確認された値ではない。Worker と Probe は読み取りと書き込みが混ざり、
+内訳を測っていないので、仮定した要求はすべて単価の高い PUT/COPY/POST/LIST で計算する。GET の単価（1 件 0.00000037 USD）
+なら同じ 2,000 件で 0.00074 USD、PUT/LIST の単価では 0.0094 USD になる（20 回 × 100 件。算術であり請求額ではない）。
+`AmazonFSx` の Price List には S3 Access Points の要求の usagetype がない（2026-10-11 に確認）。価格ファイルにキーが
+欠けている場合、その行は既定値で埋めず、小計なしの `not retrieved` として記録する。その行は合計に入らないので、
+合計は実際より低い値になる。見積りの出力で、`not retrieved` の行が無いことを確かめてから合計を使う。
 
 見積りは、承認する `parameters`（`BaseStackName`、`LambdaPackageKey`、`LambdaHandler`、`LambdaRuntime`、
 `FileSystemIdentityUser`、指定したときだけ `ArtifactsBucketName`）も記録する。`deploy.sh stage3` はこれを
@@ -109,7 +110,7 @@ S3 Access Points の制約は、主張ごとに Hub のノートを出典とし�
 - 認可の二層構造: [access-point-authorization-layers](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/security-governance/notes/access-point-authorization-layers.md)
 - S3 Access Points で使える操作（`DeleteObject` を含む。Object Lock と条件付き書き込みは使えない）: [Access point compatibility](https://docs.aws.amazon.com/fsx/latest/ONTAPGuide/access-points-for-fsxn-object-api-support.html)（2026-10-11 に確認）
 - Lambda のランタイムと廃止日: [Lambda runtimes](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html)（2026-10-11 に確認）
-- S3 Access Points 経由の S3 の要求とデータ転送に課金されること: [Amazon FSx for NetApp ONTAP pricing](https://aws.amazon.com/fsx/netapp-ontap/pricing/) の英語ページ（2026-10-12 に確認）。要求の単価は Amazon S3 の Price List から取る（上の見積りの節を参照）
+- S3 Access Points 経由の S3 の要求とデータ転送に課金されること: [Amazon FSx for NetApp ONTAP pricing](https://aws.amazon.com/fsx/netapp-ontap/pricing/) の英語ページ「S3 Access Points for FSx」の節（2026-10-12 に確認。表の数値は未読）。見積りに使う単価は Amazon S3 の Price List の値で、ページの表示値との一致は未確認（上の見積りの節を参照） <!-- allow:naming -->
 
 ## 予想（未検証）
 

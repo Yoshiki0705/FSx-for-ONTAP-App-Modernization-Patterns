@@ -407,6 +407,7 @@ class Stage3EstimateTests(unittest.TestCase):
             "9C7873KU3ZQBD6BJ",
             "2026-10-12",
             "ap-northeast-1",
+            "S3 Access Points for FSx",
             "assumes",
         ):
             self.assertIn(text, item["source"])

@@ -128,25 +128,27 @@ STAGE3_MAX_INVOCATIONS = 10000
 # inbox document, the index write and read-back; Probe: about ten) and log bytes per invocation.
 STAGE3_S3AP_REQUESTS_PER_INVOCATION = 100
 STAGE3_LOG_MIB_PER_INVOCATION = 1
-# The English FSx for ONTAP pricing page says you pay for S3 requests when you access data through S3
-# Access Points, and lists no unit price. It does not say those requests use the Amazon S3 Standard
-# request rates, so the estimate ASSUMES the S3 list prices (an assumption, not confirmed billing).
-# The rates are from the Amazon S3 Price List (service AmazonS3, ap-northeast-1, On-Demand), read
-# 2026-10-12: APN1-Requests-Tier1 (SKU XAKHUSC46NWC9PPM) is $0.0047 per 1,000 PUT/COPY/POST/LIST
-# requests; APN1-Requests-Tier2 (SKU 9C7873KU3ZQBD6BJ) is $0.0037 per 10,000 GET requests. The
-# AmazonFSx Price List has no S3 Access Points request usagetype (checked 2026-10-11).
+# The English FSx for ONTAP pricing page (read 2026-10-12) has an "S3 Access Points for FSx" section. It
+# says you pay for S3 requests made against S3 Access Points, by request type (PUT/COPY/POST/LIST and
+# GET/other, per 1,000 requests), at the same rate as API/SDK requests. The table's numbers are rendered
+# client-side, so they were not read. The estimate uses the Amazon S3 Price List values (service
+# AmazonS3, ap-northeast-1, On-Demand), read 2026-10-12: APN1-Requests-Tier1 (SKU XAKHUSC46NWC9PPM) is
+# $0.0047 per 1,000 PUT/COPY/POST/LIST requests; APN1-Requests-Tier2 (SKU 9C7873KU3ZQBD6BJ) is $0.0037
+# per 10,000 GET requests. That these equal the numbers the page displays is ASSUMED, not checked
+# (an assumption, not confirmed billing). The AmazonFSx Price List has no S3 Access Points request
+# usagetype (checked 2026-10-11).
 FSX_S3AP_REQUEST_SOURCE = (
-    "Requests are billed: https://aws.amazon.com/fsx/netapp-ontap/pricing/ (English page, read "
-    "2026-10-12). Unit price: Amazon S3 Price List, ap-northeast-1, read 2026-10-12 - "
-    "APN1-Requests-Tier1 SKU XAKHUSC46NWC9PPM $0.0047/1,000 PUT/COPY/POST/LIST; "
-    "APN1-Requests-Tier2 SKU 9C7873KU3ZQBD6BJ $0.0037/10,000 GET. The pricing page lists no "
-    "per-request unit and does not say FSx for ONTAP S3 Access Points requests use these S3 rates; "
-    "the estimate assumes they do"
+    "Requests are billed, by request type: https://aws.amazon.com/fsx/netapp-ontap/pricing/ (English "
+    "page, section S3 Access Points for FSx, read 2026-10-12; the displayed numbers are rendered "
+    "client-side and were not read). Unit price used: Amazon S3 Price List, ap-northeast-1, read "
+    "2026-10-12 - APN1-Requests-Tier1 SKU XAKHUSC46NWC9PPM $0.0047/1,000 PUT/COPY/POST/LIST; "
+    "APN1-Requests-Tier2 SKU 9C7873KU3ZQBD6BJ $0.0037/10,000 GET. The estimate assumes these equal "
+    "the page's displayed values; that match is not checked"
 )
 S3AP_REQUEST_CEILING_NOTE = (
     "upper bound: every assumed request is priced at the PUT/COPY/POST/LIST rate "
     "(s3_put_list_request); the GET rate (s3_get_request) is lower and shown on the next line for "
-    "reference only. S3 list prices are an assumption for S3 Access Points, not confirmed billing"
+    "reference only. That the S3 list prices equal the pricing page's displayed values is an assumption, not confirmed billing"
 )
 S3_DATA_TRANSFER_NOTE = (
     "not included in the total: data transfer through an S3 Access Point is billed as for an S3 "
