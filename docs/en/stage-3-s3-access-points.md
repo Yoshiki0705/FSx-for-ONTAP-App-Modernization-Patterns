@@ -79,10 +79,24 @@ stack. The base hours are included in the `base` (and `extend`) estimates.
 |---|---|---|
 | Lambda requests | Number of manual invocations (default 20, set with `--invocations`) | Price List `AWSLambda`, `APN1-Request` |
 | Lambda duration | Invocations × 0.5 GB × the 120-second ceiling | Price List `AWSLambda`, `APN1-Lambda-GB-Second` (first-tier price) |
-| S3 Access Points requests | An upper bound assuming 100 per invocation | Not retrievable. The FSx for ONTAP pricing page says S3 requests through S3 Access Points are charged but lists no per-request price, and Price List `AmazonFSx` has no matching usagetype (checked 2026-10-11). The estimate records `not retrieved` and excludes it from the total |
+| S3 Access Points requests | An upper bound assuming 100 per invocation, all priced at the PUT/COPY/POST/LIST rate | Amazon S3 Price List `AmazonS3`, `APN1-Requests-Tier1` (SKU XAKHUSC46NWC9PPM): $0.0047 per 1,000 requests, ap-northeast-1, read 2026-10-12. Assumed to apply; see the note below the table |
+| S3 Access Points requests (GET rate) | The same count, shown for reference and excluded from the total | Amazon S3 Price List `AmazonS3`, `APN1-Requests-Tier2` (SKU 9C7873KU3ZQBD6BJ): $0.0037 per 10,000 requests, ap-northeast-1, read 2026-10-12 |
 | CloudWatch Logs ingestion | An upper bound assuming 1 MiB per invocation | Price List `AmazonCloudWatch`, `APN1-DataProcessing-Bytes` |
 | EventBridge Scheduler | 0 invocations because it is `DISABLED`, $0 | None |
-| S3 data transfer | Not counted | Per the pricing page, data transfer through S3 Access Points follows S3 data transfer pricing |
+| S3 data transfer | Not counted. It depends on object sizes the estimate does not assume | Per the pricing page, data transfer through S3 Access Points is billed as for an S3 bucket |
+
+The request line is an upper bound, and it rests on an assumption. The English
+[Amazon FSx for NetApp ONTAP pricing](https://aws.amazon.com/fsx/netapp-ontap/pricing/) page (read 2026-10-12)
+says you pay for S3 requests when you access data through S3 Access Points, so the charge exists. The page
+lists no per-request price, and it does not say that these requests use the Amazon S3 Standard request
+rates. The estimate therefore assumes the S3 list prices above (ap-northeast-1, On-Demand, read
+2026-10-12), which is not confirmed billing. Every assumed request is priced at the higher PUT/COPY/POST/LIST
+rate, because the Worker and the Probe mix reads and writes and the split is not measured. At the GET rate
+(0.00000037 USD per request) the same 2,000 requests would be 0.00074 USD, against 0.0094 USD at the
+PUT/LIST rate (20 invocations × 100 requests; arithmetic, not an invoice figure). The `AmazonFSx` Price List
+has no S3 Access Points request usagetype (checked 2026-10-11), so the S3 Price List is the only source of a
+unit price. If a price key is missing from the price file, the line is recorded as `not retrieved` with no
+subtotal rather than defaulted.
 
 The estimate also records the `parameters` to be approved (`BaseStackName`, `LambdaPackageKey`,
 `LambdaHandler`, `LambdaRuntime`, `FileSystemIdentityUser`, and `ArtifactsBucketName` only when
@@ -103,7 +117,7 @@ S3 Access Points constraints are cited per claim from Hub notes (contents are no
 - The two-layer authorization: [access-point-authorization-layers](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/security-governance/notes/access-point-authorization-layers.md)
 - Operations usable on S3 Access Points (including `DeleteObject`; Object Lock and conditional writes are not usable): [Access point compatibility](https://docs.aws.amazon.com/fsx/latest/ONTAPGuide/access-points-for-fsxn-object-api-support.html) (checked 2026-10-11)
 - Lambda runtimes and deprecation dates: [Lambda runtimes](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html) (checked 2026-10-11)
-- Billing for S3 requests and data transfer: [Amazon FSx for NetApp ONTAP pricing](https://aws.amazon.com/fsx/netapp-ontap/pricing/) (checked 2026-10-11)
+- That S3 requests and data transfer through S3 Access Points are billed: [Amazon FSx for NetApp ONTAP pricing](https://aws.amazon.com/fsx/netapp-ontap/pricing/), English page (checked 2026-10-12). Unit prices for requests come from the Amazon S3 Price List (see the estimate section above)
 
 ## Predictions (unverified)
 

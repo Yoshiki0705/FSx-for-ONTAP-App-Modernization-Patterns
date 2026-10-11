@@ -10,5 +10,7 @@
   "transform_agent_minute": 0.035,
   "lambda_request": 0.0000002,
   "lambda_gb_second": 0.0000166667,
-  "cwl_ingest_gb": 0.76
+  "cwl_ingest_gb": 0.76,
+  "s3_put_list_request": 0.0000047,
+  "s3_get_request": 0.00000037
 }

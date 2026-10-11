@@ -20,7 +20,8 @@ Three jobs, selected by flags:
                  caveat that this script cannot observe how much of the quota is left.
                  --target stage3 prices only the add-on stack (Lambda requests and GB-seconds for
                  --invocations manual runs at the template's memory and timeout ceiling, S3 Access
-                 Point requests, CloudWatch Logs, and a $0 DISABLED schedule) and records the
+                 Point requests priced at the Amazon S3 PUT/LIST list rate as an assumed upper
+                 bound, CloudWatch Logs, and a $0 DISABLED schedule) and records the
                  stage-3 deploy parameters, which deploy.sh stage3 passes to create-stack.
   --elapsed      Compute the elapsed fraction of the approved base time from approval.json and
                  return exit 3 when it exceeds 80%. The origin is always the base approval time; atx
@@ -127,19 +128,30 @@ STAGE3_MAX_INVOCATIONS = 10000
 # inbox document, the index write and read-back; Probe: about ten) and log bytes per invocation.
 STAGE3_S3AP_REQUESTS_PER_INVOCATION = 100
 STAGE3_LOG_MIB_PER_INVOCATION = 1
-# The FSx for ONTAP pricing page says S3 requests through S3 Access Points are billed, but publishes
-# no per-request unit, and the AmazonFSx Price List in ap-northeast-1 has no S3 Access Point request
-# usagetype (its Request family holds only the capacity-pool CPoolStdRd / CPoolStdWr rates). Both
-# checked 2026-10-11. Unless a fsx_s3ap_request price is supplied, the line is "not retrieved".
+# The English FSx for ONTAP pricing page says you pay for S3 requests when you access data through S3
+# Access Points, and lists no unit price. It does not say those requests use the Amazon S3 Standard
+# request rates, so the estimate ASSUMES the S3 list prices (an assumption, not confirmed billing).
+# The rates are from the Amazon S3 Price List (service AmazonS3, ap-northeast-1, On-Demand), read
+# 2026-10-12: APN1-Requests-Tier1 (SKU XAKHUSC46NWC9PPM) is $0.0047 per 1,000 PUT/COPY/POST/LIST
+# requests; APN1-Requests-Tier2 (SKU 9C7873KU3ZQBD6BJ) is $0.0037 per 10,000 GET requests. The
+# AmazonFSx Price List has no S3 Access Points request usagetype (checked 2026-10-11).
 FSX_S3AP_REQUEST_SOURCE = (
-    "https://aws.amazon.com/fsx/netapp-ontap/pricing/ (read 2026-10-11, re-read 2026-10-12): S3 "
-    "requests through S3 Access Points are billed, but no per-request unit is published; the "
-    "AmazonFSx Price List has no S3 Access Point request usagetype for ap-northeast-1 (checked "
-    "2026-10-11): no distinct Price List key found"
+    "Requests are billed: https://aws.amazon.com/fsx/netapp-ontap/pricing/ (English page, read "
+    "2026-10-12). Unit price: Amazon S3 Price List, ap-northeast-1, read 2026-10-12 - "
+    "APN1-Requests-Tier1 SKU XAKHUSC46NWC9PPM $0.0047/1,000 PUT/COPY/POST/LIST; "
+    "APN1-Requests-Tier2 SKU 9C7873KU3ZQBD6BJ $0.0037/10,000 GET. The pricing page lists no "
+    "per-request unit and does not say FSx for ONTAP S3 Access Points requests use these S3 rates; "
+    "the estimate assumes they do"
+)
+S3AP_REQUEST_CEILING_NOTE = (
+    "upper bound: every assumed request is priced at the PUT/COPY/POST/LIST rate "
+    "(s3_put_list_request); the GET rate (s3_get_request) is lower and shown on the next line for "
+    "reference only. S3 list prices are an assumption for S3 Access Points, not confirmed billing"
 )
 S3_DATA_TRANSFER_NOTE = (
-    "not priced here: data transfer through an S3 Access Point follows Amazon S3 data-transfer "
-    "pricing (https://aws.amazon.com/fsx/netapp-ontap/pricing/, read 2026-10-11)"
+    "not included in the total: data transfer through an S3 Access Point is billed as for an S3 "
+    "bucket (https://aws.amazon.com/fsx/netapp-ontap/pricing/, read 2026-10-12), and the volume "
+    "depends on object sizes this estimate does not assume"
 )
 STACK_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9-]{0,127}$")
 PACKAGE_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,1000}\.zip$")
@@ -489,8 +501,12 @@ def stage3_line_items(
       lambda_request    AWSLambda, usagetype APN1-Request (per request)
       lambda_gb_second  AWSLambda, usagetype APN1-Lambda-GB-Second, first tier (x86_64)
       cwl_ingest_gb     AmazonCloudWatch, usagetype APN1-DataProcessing-Bytes (Standard log class)
-      fsx_s3ap_request  no Price List key found (FSX_S3AP_REQUEST_SOURCE); "not retrieved" unless
-                        supplied
+      s3_put_list_request  AmazonS3, usagetype APN1-Requests-Tier1 (per request): PUT/COPY/POST/LIST.
+                        Prices every assumed S3 Access Points request, as an upper bound
+      s3_get_request    AmazonS3, usagetype APN1-Requests-Tier2 (per request): GET. Reference line
+                        only, not in the total
+      The S3 rates are an assumption for S3 Access Points (FSX_S3AP_REQUEST_SOURCE). A price key
+      that is absent is recorded as "not retrieved" with a null subtotal, never defaulted.
     The Lambda free tier is not applied. The base environment is not re-priced here.
     """
     gb_seconds = invocations * (STAGE3_MEMORY_MB / 1024) * STAGE3_TIMEOUT_S
@@ -501,6 +517,9 @@ def stage3_line_items(
         label: str, key: str, quantity: float, unit: str, **extra: object
     ) -> dict:
         price = prices.get(key)
+        # An explanatory note applies only when the price was found; an absent price is always
+        # recorded as "not retrieved" with a null subtotal, never defaulted.
+        explanation = str(extra.pop("note", ""))
         item: dict[str, object] = {
             "label": label,
             "unit_usd": price,
@@ -509,7 +528,7 @@ def stage3_line_items(
             "hours": 0,
             # Six places: a few manual runs cost fractions of a cent, which two places would hide.
             "subtotal_usd": None if price is None else round(price * quantity, 6),
-            "note": "not retrieved" if price is None else "",
+            "note": "not retrieved" if price is None else explanation,
         }
         item.update(extra)
         return item
@@ -530,11 +549,25 @@ def stage3_line_items(
         ),
         usage(
             f"FSx for ONTAP S3 Access Points requests (ceiling, "
-            f"{STAGE3_S3AP_REQUESTS_PER_INVOCATION} per invocation, assumed)",
-            "fsx_s3ap_request",
+            f"{STAGE3_S3AP_REQUESTS_PER_INVOCATION} per invocation, assumed, at the "
+            "PUT/LIST rate)",
+            "s3_put_list_request",
             s3ap_requests,
             "requests",
             source=FSX_S3AP_REQUEST_SOURCE,
+            note=S3AP_REQUEST_CEILING_NOTE,
+        ),
+        usage(
+            "FSx for ONTAP S3 Access Points requests (GET rate, reference only, not in the total)",
+            "s3_get_request",
+            s3ap_requests,
+            "requests",
+            reference_usd=None
+            if prices.get("s3_get_request") is None
+            else round(prices["s3_get_request"] * s3ap_requests, 6),
+            subtotal_usd=None,
+            note="reference only: the same assumed requests at the GET rate; not added to the "
+            "total",
         ),
         usage(
             f"Amazon CloudWatch Logs ingestion (ceiling, {STAGE3_LOG_MIB_PER_INVOCATION} MiB "
