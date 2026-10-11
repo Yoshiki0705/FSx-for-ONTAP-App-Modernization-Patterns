@@ -94,6 +94,22 @@ left in place across rebuilds rather than deleted; `teardown.sh` does not touch 
 not use `--template-url`. Either way, `--on-failure DELETE` and the approved `--parameters` are
 unchanged.
 
+The secret creation of step 2 (`scripts/create-secrets.sh`) must run before step 4's `deploy.sh
+base`. Before the upload and `create-stack`, `deploy.sh base` confirms with `secretsmanager
+describe-secret` that the two secrets the base stack resolves at create time exist
+(`AdAdminSecretName` → `appmod/ad-admin`, `FsxAdminSecretName` → `appmod/fsxadmin`; the estimate's
+value if it overrode the parameter). If either is missing it names the missing secret, points at
+`scripts/create-secrets.sh`, and exits 2. The approved estimate is not consumed in that case (it is
+not moved to `used/`), so the same estimate can be reused once the secrets exist. This enforcement
+addresses the 2026-10-11 incident on a `base` run that skipped `scripts/create-secrets.sh`:
+submitting `create-stack` with the secrets absent had CloudFormation start creating resources, the
+directory fail with "Secrets Manager can't find the specified secret", and the whole stack roll back
+via `--on-failure DELETE`. Nothing was left billing, but the approved estimate was consumed on
+submission. The precheck stops while the estimate is still unused. The read-only
+`scripts/preflight.sh --phase secrets` checks all four secrets and their keys as a separate step; the
+precheck does not replace it but is a last-line gate inside `deploy.sh base` itself, so the step
+cannot be skipped unnoticed.
+
 ## Gaps found after creation
 
 > Evidence tier: `verified` (2026-10-07, ap-northeast-1, observed from the Windows Server 2022 EC2).

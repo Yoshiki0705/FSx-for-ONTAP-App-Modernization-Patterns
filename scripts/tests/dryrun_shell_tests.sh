@@ -151,6 +151,140 @@ check_before "deploy.sh base dry-run uploads before create-stack" \
 check_before "deploy.sh base dry-run create-stack before the estimate move" \
   "create-stack --stack-name appmod-base" "DRY-RUN: mv" "$VALID_OUT"
 
+# 1d. The base secrets precheck runs under dry-run (printed, no real call) for exactly the two
+# base-stack secrets, before the template upload. The estimate records neither secret parameter, so
+# the template defaults appmod/ad-admin and appmod/fsxadmin apply.
+check_contains "deploy.sh base dry-run prechecks the AD admin secret" \
+  "secretsmanager describe-secret --secret-id appmod/ad-admin" "$VALID_OUT"
+check_contains "deploy.sh base dry-run prechecks the fsxadmin secret" \
+  "secretsmanager describe-secret --secret-id appmod/fsxadmin" "$VALID_OUT"
+check_absent "deploy.sh base dry-run does not precheck the later ONTAP secrets" \
+  "describe-secret --secret-id appmod/app-users" "$VALID_OUT"
+check_absent "deploy.sh base dry-run does not precheck the itclone secret" \
+  "describe-secret --secret-id appmod/ontap-itclone" "$VALID_OUT"
+check_before "deploy.sh base dry-run prechecks the secret before the upload" \
+  "secretsmanager describe-secret --secret-id appmod/ad-admin" "s3 cp templates/base.yaml" "$VALID_OUT"
+
+# 1e. Defaults parity: the two constants hardcoded in deploy.sh equal base.yaml's Default values, so
+# the second copy cannot drift unnoticed. tools/ and scripts/ are stdlib-only, so parse base.yaml
+# with a narrow targeted scan (find the key under Parameters:, read its Default: line) and assert
+# both keys were found so a rename fails loudly.
+if python3 - <<'PY'
+import re, sys
+
+yaml = open("templates/base.yaml", encoding="utf-8").read()
+sh = open("scripts/deploy.sh", encoding="utf-8").read()
+
+
+def default_of(key):
+    # Narrow scan: find "  <key>:" at the parameter indent, then the first "Default:" after it.
+    m = re.search(rf"(?m)^  {re.escape(key)}:\s*$", yaml)
+    if not m:
+        return None
+    tail = yaml[m.end():]
+    d = re.search(r"(?m)^    Default:\s*(\S+)\s*$", tail)
+    return d.group(1) if d else None
+
+
+def const_of(name):
+    m = re.search(rf'(?m)^{re.escape(name)}="([^"]+)"\s*$', sh)
+    return m.group(1) if m else None
+
+
+ad_yaml = default_of("AdAdminSecretName")
+fsx_yaml = default_of("FsxAdminSecretName")
+ad_sh = const_of("AD_ADMIN_SECRET_DEFAULT")
+fsx_sh = const_of("FSX_ADMIN_SECRET_DEFAULT")
+if not all([ad_yaml, fsx_yaml, ad_sh, fsx_sh]):
+    print(f"missing: {ad_yaml=} {fsx_yaml=} {ad_sh=} {fsx_sh=}", file=sys.stderr)
+    sys.exit(1)
+sys.exit(0 if ad_yaml == ad_sh and fsx_yaml == fsx_sh else 1)
+PY
+then
+  echo "ok: deploy.sh secret defaults match templates/base.yaml"
+else
+  echo "FAIL: deploy.sh *_SECRET_DEFAULT constants differ from base.yaml Defaults" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 1f/1g. Real-mode secrets precheck (APPMOD_DRY_RUN unset, a mocked `aws` on PATH, mirroring the
+# teardown / run-atx MOCK_BIN pattern). The mock logs every call and answers only what this path
+# asks; no AWS or network call is made. Each case uses a fresh copy of the valid base estimate with
+# its own approval record so the entry check passes and the only variable is the secret.
+DEPLOY_MOCK="$TMP/deploymock"; mkdir -p "$DEPLOY_MOCK"
+cat >"$DEPLOY_MOCK/aws" <<'MOCK'
+#!/bin/bash
+echo "aws $*" >>"$MOCK_DEPLOY_LOG"
+case "$*" in
+  *"secretsmanager describe-secret"*"ad-admin"*)
+    # The AD admin secret is absent in the missing-secret case, present in the both-present case.
+    if [ -n "${MOCK_AD_SECRET_MISSING:-}" ]; then
+      echo "ResourceNotFoundException: Secrets Manager can't find the specified secret." >&2
+      exit 254
+    fi
+    echo '{"Name":"appmod/ad-admin"}' ;;
+  *"secretsmanager describe-secret"*"fsxadmin"*)
+    echo '{"Name":"appmod/fsxadmin"}' ;;
+  *"sts get-caller-identity"*) echo 123456789012 ;;
+  *"s3api head-bucket"*) exit 0 ;;
+  *"s3 cp"*) echo "upload: ok" ;;
+  *"cloudformation create-stack"*) echo '{"StackId":"arn:aws:cloudformation:ap-northeast-1:123456789012:stack/appmod-base/mock"}' ;;
+  *) echo "" ;;
+esac
+MOCK
+chmod +x "$DEPLOY_MOCK/aws"
+deploy_add_approval() {  # deploy_add_approval <estimate-file>
+  python3 - "$APPROVAL" "$1" "$APPROVED" <<'PY'
+import json,sys
+p,est,approved=sys.argv[1:4]
+d=json.load(open(p)); d.append({"target":"base","approved_at":approved,"hours":72,"estimate_file":est}); json.dump(d,open(p,"w"))
+PY
+}
+
+# 1f. A missing AD admin secret: deploy exits 2 naming it and pointing at create-secrets.sh, before
+# any upload or create-stack, and the estimate is NOT moved to used/.
+EST_MISSING="$EST_DIR/case-missing-secret.json"
+cp "$EST_BASE" "$EST_MISSING"
+deploy_add_approval "$EST_MISSING"
+export MOCK_DEPLOY_LOG="$TMP/deploy-missing.log"; : >"$MOCK_DEPLOY_LOG"
+MS_OUT="$(env -u APPMOD_DRY_RUN PATH="$DEPLOY_MOCK:$PATH" MOCK_AD_SECRET_MISSING=1 \
+  bash scripts/deploy.sh base --estimate "$EST_MISSING" --approved-at "$APPROVED" 2>&1)"; MS_RC=$?
+if [ "$MS_RC" -eq 2 ] \
+  && printf '%s' "$MS_OUT" | grep -qF "required secret not found: appmod/ad-admin" \
+  && printf '%s' "$MS_OUT" | grep -qF "scripts/create-secrets.sh" \
+  && ! grep -q "create-stack" "$MOCK_DEPLOY_LOG" \
+  && ! grep -q "s3 cp" "$MOCK_DEPLOY_LOG" \
+  && [ -f "$EST_MISSING" ] && [ ! -f "$EST_DIR/used/case-missing-secret.json" ]; then
+  echo "ok: deploy.sh base refuses (exit 2) on a missing secret before any upload/create, estimate kept"
+else
+  echo "FAIL: deploy.sh base missing-secret (rc=$MS_RC) should exit 2 before upload/create and keep the estimate" >&2
+  printf '%s\n' "$MS_OUT" >&2; cat "$MOCK_DEPLOY_LOG" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+
+# 1g. Both secrets present: deploy proceeds (exit 0), both describe-secret calls run before
+# create-stack, and the estimate is consumed (moved to used/).
+EST_PRESENT="$EST_DIR/case-both-secrets.json"
+cp "$EST_BASE" "$EST_PRESENT"
+deploy_add_approval "$EST_PRESENT"
+export MOCK_DEPLOY_LOG="$TMP/deploy-present.log"; : >"$MOCK_DEPLOY_LOG"
+BP_OUT="$(env -u APPMOD_DRY_RUN PATH="$DEPLOY_MOCK:$PATH" \
+  bash scripts/deploy.sh base --estimate "$EST_PRESENT" --approved-at "$APPROVED" 2>&1)"; BP_RC=$?
+if [ "$BP_RC" -eq 0 ] \
+  && grep -q "secretsmanager describe-secret --secret-id appmod/ad-admin" "$MOCK_DEPLOY_LOG" \
+  && grep -q "secretsmanager describe-secret --secret-id appmod/fsxadmin" "$MOCK_DEPLOY_LOG" \
+  && grep -q "cloudformation create-stack" "$MOCK_DEPLOY_LOG" \
+  && [ "$(grep -n "describe-secret" "$MOCK_DEPLOY_LOG" | tail -1 | cut -d: -f1)" -lt \
+        "$(grep -n "create-stack" "$MOCK_DEPLOY_LOG" | head -1 | cut -d: -f1)" ] \
+  && [ ! -f "$EST_PRESENT" ] && [ -f "$EST_DIR/used/case-both-secrets.json" ]; then
+  echo "ok: deploy.sh base proceeds (exit 0) when both secrets exist, prechecking before create-stack"
+else
+  echo "FAIL: deploy.sh base both-secrets-present (rc=$BP_RC) should exit 0 and precheck before create-stack" >&2
+  printf '%s\n' "$BP_OUT" >&2; cat "$MOCK_DEPLOY_LOG" >&2
+  FAILURES=$((FAILURES + 1))
+fi
+unset MOCK_DEPLOY_LOG MOCK_AD_SECRET_MISSING
+
 # 2. no estimate file
 expect_exit 2 "deploy.sh base missing estimate" \
   bash scripts/deploy.sh base --estimate "$EST_DIR/nope.json" --approved-at "$APPROVED"

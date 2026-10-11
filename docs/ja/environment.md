@@ -85,6 +85,20 @@ CloudFormation の `--template-body` のインライン上限 51,200 バイト�
 上限内なので、`--template-url` を使わず `--template-body` のままである。`--on-failure DELETE` と承認した
 `--parameters` は、どちらの渡し方でも変わらない。
 
+手順 2 のシークレット作成（`scripts/create-secrets.sh`）は、手順 4 の `deploy.sh base` より前に
+済ませる。`deploy.sh base` は、アップロードと `create-stack` の前に、基盤スタックが作成時に解決する
+2 つのシークレット（`AdAdminSecretName` → `appmod/ad-admin`、`FsxAdminSecretName` → `appmod/fsxadmin`。
+見積りがこのパラメータを上書きしていればその値）の存在を `secretsmanager describe-secret` で確かめる。
+どちらかが無ければ、無いシークレット名を挙げて `scripts/create-secrets.sh` の実行を促し、終了コード 2 で
+止まる。このとき承認済みの見積りは消費されない（`used/` へ移さない）ので、シークレット作成後に同じ
+見積りで再実行できる。この確認は、`scripts/create-secrets.sh` を飛ばした `base` の実行で生じた
+2026-10-11 の事象への対処である。シークレット不在のまま `create-stack` を投げると、CloudFormation は
+リソースを作り始め、ディレクトリが「Secrets Manager can't find the specified secret」で失敗し、
+`--on-failure DELETE` でスタック全体がロールバックした。残るリソースは無かったが、承認済みの見積りは
+投入の時点で消費された。この確認は見積りがまだ未消費のうちに止める。読み取りのみの
+`scripts/preflight.sh --phase secrets` は 4 つのシークレットとその鍵を別途点検する手順で、これを
+置き換えるものではなく、飛ばせないよう `deploy.sh base` 自身に置いた最後の関門である。
+
 ## 作成後に判明した前提の不足
 
 > 証拠区分: `verified`（2026-10-07、ap-northeast-1、Windows Server 2022 の EC2 から確認）。
