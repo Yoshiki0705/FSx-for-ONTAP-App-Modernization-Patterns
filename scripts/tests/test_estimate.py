@@ -7,8 +7,9 @@ move the origin", the --target base minimum recheck (exit 4 on mismatch, exit 0 
 --target atx: --transformation / --limit-minutes required and allow-listed (exit 2 otherwise),
 refused on other targets, recorded as parameters, and priced as the ceiling N x unit price, with
 an expected $0 inside the AWS/dotnet-modernization quota. --target stage3: add-on line items only,
-the S3 Access Point request charge "not retrieved" without a unit, stage-3 parameters recorded with
-the template's defaults, and bad stage-3 inputs refused.
+the S3 Access Points request charge priced at the FSx for ONTAP PUT/LIST rate as an upper bound (GET rate
+shown for reference only, a missing S3 request price recorded as "not retrieved"), stage-3
+parameters recorded with the template's defaults, and bad stage-3 inputs refused.
 """
 
 from __future__ import annotations
@@ -384,35 +385,124 @@ class Stage3EstimateTests(unittest.TestCase):
         self.assertEqual(scheduler["subtotal_usd"], 0.0)
         self.assertIn("DISABLED", scheduler["label"])
 
-    def test_s3_access_point_requests_are_not_retrieved_without_a_unit(self) -> None:
-        # The shipped fixture, like the live Price List, has no fsx_s3ap_request price.
+    def test_s3_access_point_requests_are_priced_at_the_put_list_rate_as_an_upper_bound(
+        self,
+    ) -> None:
+        code, payload = self._run_stage3(["--invocations", "20"])
+        self.assertEqual(code, 0)
+        item = self._item(payload, "FSx for ONTAP S3 Access Points requests (ceiling")
+        self.assertEqual(
+            item["quantity"], 20 * estimate.STAGE3_S3AP_REQUESTS_PER_INVOCATION
+        )
+        self.assertEqual(item["quantity"], 2000)
+        self.assertEqual(item["unit_usd"], 0.00000108)
+        self.assertAlmostEqual(item["subtotal_usd"], 2000 * 0.00000108, places=9)
+        self.assertIn("upper bound", item["note"])
+        self.assertIn("not confirmed billing", item["note"])
+        self.assertNotIn("not retrieved", item["note"])
+        # The basis: the English FSx for ONTAP pricing page, tab "S3 Access Points for FSx".
+        for text in (
+            "https://aws.amazon.com/fsx/netapp-ontap/pricing/",
+            "2026-10-12",
+            "ap-northeast-1",
+            "S3 Access Points for FSx",
+            "$0.00108",
+            "$0.000029",
+            "not visible to a plain HTTP fetch",
+            "Price List API",
+            "not verified",
+        ):
+            self.assertIn(text, item["source"])
+        # The Amazon S3 list-price SKUs are not the unit-price source.
+        for text in ("XAKHUSC46NWC9PPM", "9C7873KU3ZQBD6BJ", "0.0047", "0.0037"):
+            self.assertNotIn(text, item["source"])
+
+    def test_get_rate_is_a_reference_line_outside_the_total(self) -> None:
+        code, payload = self._run_stage3(["--invocations", "20"])
+        self.assertEqual(code, 0)
+        ref = self._item(payload, "FSx for ONTAP S3 Access Points requests (GET")
+        self.assertEqual(ref["unit_usd"], 0.000000029)
+        self.assertIsNone(ref["subtotal_usd"])
+        self.assertAlmostEqual(ref["reference_usd"], 2000 * 0.000000029, places=9)
+        self.assertLess(ref["unit_usd"], 0.00000108)
+        self.assertIn("reference only", ref["note"])
+
+    def test_stage3_total_includes_the_request_line(self) -> None:
+        code, payload = self._run_stage3(["--invocations", "20"])
+        self.assertEqual(code, 0)
+        expected = (
+            20 * 0.0000002
+            + 1200 * 0.0000166667
+            + 2000 * 0.00000108
+            + round(20 / 1024, 6) * 0.76
+        )
+        self.assertAlmostEqual(payload["total_usd"], expected, places=2)
+        # The request line is a real contribution: dropping it changes the rounded total.
+        without = expected - 2000 * 0.00000108
+        self.assertNotEqual(round(without, 2), round(expected, 2))
+        self.assertNotIn(
+            "not retrieved",
+            json.dumps(
+                self._item(payload, "FSx for ONTAP S3 Access Points requests (ceiling")
+            ),
+        )
+
+    def test_data_transfer_stays_outside_the_total_and_says_why(self) -> None:
         code, payload = self._run_stage3([])
         self.assertEqual(code, 0)
-        item = self._item(payload, "FSx for ONTAP S3 Access Points requests")
-        self.assertEqual(item["note"], "not retrieved")
+        item = self._item(payload, "S3 data transfer")
         self.assertIsNone(item["subtotal_usd"])
-        self.assertIsNone(item["unit_usd"])
-        self.assertIn(
-            "https://aws.amazon.com/fsx/netapp-ontap/pricing/", item["source"]
-        )
-        self.assertIn("2026-10-11", item["source"])
+        self.assertIn("not included", item["note"])
+        self.assertIn("billed as for an S3 bucket", item["note"])
 
-    def test_s3_access_point_requests_price_when_a_unit_is_supplied(self) -> None:
+    def test_missing_s3_request_price_is_recorded_not_guessed(self) -> None:
+        for missing, label, other in (
+            (
+                "fsx_s3ap_put_list_request",
+                "FSx for ONTAP S3 Access Points requests (ceiling",
+                "fsx_s3ap_get_request",
+            ),
+            (
+                "fsx_s3ap_get_request",
+                "FSx for ONTAP S3 Access Points requests (GET",
+                "fsx_s3ap_put_list_request",
+            ),
+        ):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as d:
+                fixture = Path(d) / "prices.json"
+                prices = json.loads(
+                    (FIXTURES / "prices.json").read_text(encoding="utf-8")
+                )
+                del prices[missing]
+                fixture.write_text(json.dumps(prices), encoding="utf-8")
+                code, payload = self._run_stage3([], price_fixture=fixture)
+                self.assertEqual(code, 0)
+                item = self._item(payload, label)
+                self.assertIsNone(item["unit_usd"])
+                self.assertIsNone(item["subtotal_usd"])
+                self.assertEqual(item["note"], "not retrieved")
+                # The other S3 request price is untouched: no default is borrowed from it.
+                present = next(
+                    i
+                    for i in payload["line_items"]
+                    if i["label"].startswith("FSx for ONTAP S3 Access Points requests")
+                    and i is not item
+                )
+                self.assertEqual(present["unit_usd"], prices[other])
+
+    def test_retired_request_key_is_not_read(self) -> None:
+        # fsx_s3ap_request is retired: a stale fixture key neither prices a line nor is an error.
         with tempfile.TemporaryDirectory() as d:
             fixture = Path(d) / "prices.json"
             prices = json.loads((FIXTURES / "prices.json").read_text(encoding="utf-8"))
-            prices["fsx_s3ap_request"] = 0.000001
+            prices["fsx_s3ap_request"] = 0.5
             fixture.write_text(json.dumps(prices), encoding="utf-8")
             code, payload = self._run_stage3(
                 ["--invocations", "10"], price_fixture=fixture
             )
         self.assertEqual(code, 0)
-        item = self._item(payload, "FSx for ONTAP S3 Access Points requests")
-        self.assertEqual(
-            item["quantity"], 10 * estimate.STAGE3_S3AP_REQUESTS_PER_INVOCATION
-        )
-        self.assertAlmostEqual(item["subtotal_usd"], 1000 * 0.000001, places=9)
-        self.assertEqual(item["note"], "")
+        item = self._item(payload, "FSx for ONTAP S3 Access Points requests (ceiling")
+        self.assertEqual(item["unit_usd"], 0.00000108)
 
     def test_missing_lambda_price_is_recorded_not_guessed(self) -> None:
         with tempfile.TemporaryDirectory() as d:
