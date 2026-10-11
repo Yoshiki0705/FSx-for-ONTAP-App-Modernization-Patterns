@@ -400,22 +400,58 @@ class Stage3EstimateTests(unittest.TestCase):
         self.assertIn("upper bound", item["note"])
         self.assertIn("not confirmed billing", item["note"])
         self.assertNotIn("not retrieved", item["note"])
-        # The basis: the English FSx for ONTAP pricing page, tab "S3 Access Points for FSx".
+        # The basis: two routes, the AmazonS3 Price List SKUs and the English pricing page tab.
         for text in (
-            "https://aws.amazon.com/fsx/netapp-ontap/pricing/",
-            "2026-10-12",
-            "ap-northeast-1",
+            "service code AmazonS3",
+            "APN1-Requests-FSXONTAP-Tier1/Tier2",
+            "ZE45RAAH9EX5HNT4",
+            "W647VRU94Q4WFUS7",
+            "read 2026-10-12",
             "S3 Access Points for FSx",
+            "https://aws.amazon.com/fsx/netapp-ontap/pricing/",
+            "ap-northeast-1",
             "$0.00108",
             "$0.000029",
             "not visible to a plain HTTP fetch",
-            "Price List API",
-            "not verified",
         ):
             self.assertIn(text, item["source"])
+        # A regression to the earlier "not checked" wording or to the wrong service code fails here.
+        for text in (
+            "not checked",
+            "not verified",
+            "AmazonFSx",
+            "SSO",
+            "FSXOPENZFS",
+        ):
+            self.assertNotIn(text, item["source"])
         # The Amazon S3 list-price SKUs are not the unit-price source.
         for text in ("XAKHUSC46NWC9PPM", "9C7873KU3ZQBD6BJ", "0.0047", "0.0037"):
             self.assertNotIn(text, item["source"])
+        # The note does not claim the invoice will match.
+        self.assertNotIn("not retrieved", item["note"])
+        self.assertIn("not confirmed billing", item["note"])
+
+    def test_source_constant_and_fixtures_name_the_amazons3_skus(self) -> None:
+        self.assertIn("service code AmazonS3", estimate.FSX_S3AP_REQUEST_SOURCE)
+        self.assertNotIn("AmazonFSx", estimate.FSX_S3AP_REQUEST_SOURCE)
+        raw = json.loads((FIXTURES / "prices.json").read_text(encoding="utf-8"))
+        for key in ("fsx_s3ap_put_list_request", "fsx_s3ap_get_request"):
+            recorded = raw["_sources"][key]
+            for text in (
+                "service code AmazonS3",
+                "APN1-Requests-FSXONTAP-Tier1/Tier2",
+                "ZE45RAAH9EX5HNT4/W647VRU94Q4WFUS7",
+                "read 2026-10-12",
+                "S3 Access Points for FSx",
+            ):
+                self.assertIn(text, recorded, key)
+            self.assertNotIn("AmazonFSx", recorded)
+            self.assertNotIn("not checked", recorded)
+        # Source metadata is not a price: the loader keeps it out of the price map.
+        prices = estimate.load_prices(FIXTURES / "prices.json")
+        self.assertNotIn("_sources", prices)
+        self.assertEqual(prices["fsx_s3ap_put_list_request"], 0.00000108)
+        self.assertEqual(prices["fsx_s3ap_get_request"], 0.000000029)
 
     def test_get_rate_is_a_reference_line_outside_the_total(self) -> None:
         code, payload = self._run_stage3(["--invocations", "20"])
