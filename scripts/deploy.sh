@@ -21,6 +21,15 @@ REGION="ap-northeast-1"
 DRY_RUN="${APPMOD_DRY_RUN:-}"
 ESTIMATES_DIR="${APPMOD_ESTIMATES_DIR:-.private/estimates}"
 
+# The two Secrets Manager secrets the base stack resolves at create time, with their template
+# defaults. Source of truth: templates/base.yaml Parameters.AdAdminSecretName.Default and
+# Parameters.FsxAdminSecretName.Default. A defaults-parity test in scripts/tests/dryrun_shell_tests.sh
+# fails the moment either constant diverges from base.yaml, so this second copy cannot rot unnoticed.
+# These two only: appmod/app-users and appmod/ontap-itclone are consumed by later ONTAP scripts, not
+# by the base stack, so checking them here would reject a valid base deploy.
+AD_ADMIN_SECRET_DEFAULT="appmod/ad-admin"
+FSX_ADMIN_SECRET_DEFAULT="appmod/fsxadmin"
+
 TARGET=""
 ESTIMATE=""
 APPROVED_AT=""
@@ -117,6 +126,52 @@ for entry in parameters:
 PY
 }
 
+# Resolve the value of a secret parameter: the estimate's recorded value if it overrode the default,
+# else the base.yaml default. Scans the already-built PARAMETERS array for a
+# "ParameterKey=<key>,ParameterValue=<value>" token. A name and an ARN both work as --secret-id, so
+# the resolved value is passed through unchanged.
+resolve_secret_value() {
+  local default="$2" token prefix="ParameterKey=$1,ParameterValue="
+  for token in "${PARAMETERS[@]}"; do
+    case "$token" in
+      "$prefix"*)
+        printf '%s' "${token#"$prefix"}"
+        return 0
+        ;;
+    esac
+  done
+  printf '%s' "$default"
+}
+
+# Before the upload and create-stack, confirm the two secrets the base stack resolves at create time
+# exist. This closes the 2026-10-11 incident: a base run submitted without create-secrets.sh had
+# CloudFormation create resources, the Directory fail with "Secrets Manager can't find the specified
+# secret", and the whole stack roll back via --on-failure DELETE — consuming the approved estimate on
+# submission. The precheck fails while the estimate is still unused, so a re-run after
+# create-secrets.sh reuses it. Under dry-run run_aws prints and returns 0 (treated as present), so no
+# real AWS call is made and existing dry-run tests still reach the upload/create/mv prints.
+precheck_base_secrets() {
+  local ad_secret fsx_secret missing=()
+  ad_secret="$(resolve_secret_value AdAdminSecretName "$AD_ADMIN_SECRET_DEFAULT")"
+  fsx_secret="$(resolve_secret_value FsxAdminSecretName "$FSX_ADMIN_SECRET_DEFAULT")"
+  local secret
+  for secret in "$ad_secret" "$fsx_secret"; do
+    if [ -n "$DRY_RUN" ]; then
+      # run_aws prints a "DRY-RUN: aws ..." line and returns 0; treat as present, no real call.
+      run_aws secretsmanager describe-secret --secret-id "$secret"
+    elif ! run_aws secretsmanager describe-secret --secret-id "$secret" >/dev/null 2>&1; then
+      missing+=("$secret")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    for secret in "${missing[@]}"; do
+      echo "deploy: required secret not found: $secret" >&2
+    done
+    echo "deploy: run scripts/create-secrets.sh to create the base-stack secrets before deploying" >&2
+    exit 2
+  fi
+}
+
 case "$TARGET" in
   base)
     STACK="appmod-base"
@@ -151,6 +206,10 @@ EOF
     echo "deploy: no deployable parameters resolved from estimate; not deploying" >&2
     exit 2
   fi
+  # The PARAMETERS array is now fully built, so an estimate that overrode AdAdminSecretName /
+  # FsxAdminSecretName is honored. Verify the two base-stack secrets exist before any upload or
+  # create; a missing secret exits 2 here with the estimate still unused.
+  precheck_base_secrets
 fi
 
 # How the template bytes reach create-stack. base.yaml (52,466 bytes) is over CloudFormation's
