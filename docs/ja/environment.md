@@ -81,7 +81,7 @@ CloudFormation の `--template-body` のインライン上限 51,200 バイト�
 `create-stack` は何も作る前に `ValidationError` で失敗する。そこで `deploy.sh` は専用のリージョン内
 デプロイバケット（`appmod-deploy-<account>-ap-northeast-1`）にテンプレートをアップロードし、
 `--template-url` で作成する。このバケットは base スタックが作る成果物バケットとは別で、再構築のたびに
-使うため削除せず残す。`teardown.sh` はこのバケットに触れない。`stage3-serverless.yaml` は 9,542 バイトで
+使うため削除せず残す。`teardown.sh` はこのバケットに触れない。`stage3-serverless.yaml` は 11,923 バイトで
 上限内なので、`--template-url` を使わず `--template-body` のままである。`--on-failure DELETE` と承認した
 `--parameters` は、どちらの渡し方でも変わらない。
 

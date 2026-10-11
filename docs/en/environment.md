@@ -90,7 +90,7 @@ CloudFormation's 51,200-byte inline `--template-body` limit, so an inline `creat
 in-region deploy bucket (`appmod-deploy-<account>-ap-northeast-1`) and creates the stack with
 `--template-url`. That bucket is separate from the artifacts bucket the base stack creates, and is
 left in place across rebuilds rather than deleted; `teardown.sh` does not touch it.
-`stage3-serverless.yaml` is 9,542 bytes, under the limit, so it stays on `--template-body` and does
+`stage3-serverless.yaml` is 11,923 bytes, under the limit, so it stays on `--template-body` and does
 not use `--template-url`. Either way, `--on-failure DELETE` and the approved `--parameters` are
 unchanged.
 
