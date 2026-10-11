@@ -121,6 +121,36 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+# 1c. base.yaml (52,466 bytes) exceeds CloudFormation's 51,200-byte inline --template-body limit, so
+# the base create must upload the template to the dedicated in-region deploy bucket and pass
+# --template-url, not --template-body. The whole path runs under APPMOD_DRY_RUN with NO AWS call
+# (every line above is a "DRY-RUN: aws ..." print; no bare "aws" invocation reaches the API). The
+# placeholder account id 123456789012 keeps the printed URL well-formed without a real sts call.
+check_contains "deploy.sh base dry-run uploads the template to the in-region deploy bucket" \
+  "s3 cp templates/base.yaml s3://appmod-deploy-123456789012-ap-northeast-1/base/" "$VALID_OUT"
+check_contains "deploy.sh base dry-run ensures the deploy bucket in-region" \
+  "s3api create-bucket --bucket appmod-deploy-123456789012-ap-northeast-1 --region ap-northeast-1 --create-bucket-configuration LocationConstraint=ap-northeast-1" "$VALID_OUT"
+check_contains "deploy.sh base dry-run create-stack uses --template-url to the deploy bucket" \
+  "create-stack --stack-name appmod-base --template-url https://s3.ap-northeast-1.amazonaws.com/appmod-deploy-123456789012-ap-northeast-1/base/" "$VALID_OUT"
+check_absent "deploy.sh base dry-run no longer inlines the template with --template-body" \
+  "appmod-base --template-body" "$VALID_OUT"
+check_contains "deploy.sh base dry-run still moves the estimate to used/ after the create" \
+  "DRY-RUN: mv" "$VALID_OUT"
+# No real AWS call: every aws line is prefixed "DRY-RUN:" (grep for a line that starts with aws
+# after optional leading whitespace and is not a DRY-RUN print).
+if printf '%s\n' "$VALID_OUT" | grep -qE '^[[:space:]]*aws '; then
+  echo "FAIL: deploy.sh base dry-run made a real aws call (unprefixed 'aws ' line)" >&2
+  printf '%s\n' "$VALID_OUT" >&2
+  FAILURES=$((FAILURES + 1))
+else
+  echo "ok: deploy.sh base dry-run makes no real AWS call (all aws lines are DRY-RUN prints)"
+fi
+# Ordering: upload BEFORE create-stack, create-stack BEFORE the estimate move.
+check_before "deploy.sh base dry-run uploads before create-stack" \
+  "s3 cp templates/base.yaml" "create-stack --stack-name appmod-base" "$VALID_OUT"
+check_before "deploy.sh base dry-run create-stack before the estimate move" \
+  "create-stack --stack-name appmod-base" "DRY-RUN: mv" "$VALID_OUT"
+
 # 2. no estimate file
 expect_exit 2 "deploy.sh base missing estimate" \
   bash scripts/deploy.sh base --estimate "$EST_DIR/nope.json" --approved-at "$APPROVED"
@@ -231,6 +261,14 @@ else
   echo "$STAGE3_OUT" >&2
   FAILURES=$((FAILURES + 1))
 fi
+# stage3-serverless.yaml (9,542 bytes) is under the inline limit and is unchanged: the create still
+# uses --template-body and never --template-url, and no deploy-bucket upload happens for stage3.
+check_contains "deploy.sh stage3 dry-run keeps --template-body (under the inline limit)" \
+  "create-stack --stack-name appmod-stage3 --template-body file://templates/stage3-serverless.yaml" "$STAGE3_OUT"
+check_absent "deploy.sh stage3 dry-run never uses --template-url" \
+  "--template-url" "$STAGE3_OUT"
+check_absent "deploy.sh stage3 dry-run never uploads to the deploy bucket" \
+  "s3 cp templates/stage3-serverless.yaml" "$STAGE3_OUT"
 
 # --- run-atx.sh: same entry check with target=atx -------------------------------------------------
 # The atx estimate records Transformation and LimitMinutes as estimate.py --target atx writes them;

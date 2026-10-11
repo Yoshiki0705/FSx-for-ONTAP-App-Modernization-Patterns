@@ -59,6 +59,17 @@ run_aws() {
   aws --region "$REGION" "$@"
 }
 
+# Resolve the account id for the deploy-bucket name. Under dry-run this is a fixed placeholder, so
+# the six entry-check cases run without credentials and the printed --template-url is well-formed;
+# in real mode it is a real sts call through run_aws.
+resolve_account_id() {
+  if [ -n "$DRY_RUN" ]; then
+    echo "123456789012"
+    return 0
+  fi
+  run_aws sts get-caller-identity --query Account --output text
+}
+
 # The approved estimate is the parameter source of truth for the base stack: deploy.sh base deploys
 # exactly the CloudFormation parameters recorded under "parameters" in the estimate, so what a human
 # approved and what create-stack receives cannot diverge. A base estimate without a parameters
@@ -142,6 +153,44 @@ EOF
   fi
 fi
 
+# How the template bytes reach create-stack. base.yaml (52,466 bytes) is over CloudFormation's
+# 51,200-byte inline --template-body limit, so a base create with --template-body fails with a
+# ValidationError before creating anything. base uploads the template to a dedicated, in-region
+# deploy bucket and passes --template-url. stage3-serverless.yaml (9,542 bytes) is under the limit
+# and stays on --template-body unchanged. The deploy bucket is distinct from the stack's
+# ArtifactsBucket (which the base stack creates, so it cannot hold the template before the stack
+# exists) and is left in place across rebuilds; teardown.sh does not touch it.
+TEMPLATE_ARG=(--template-body "file://$TEMPLATE")
+if [ "$TARGET" = "base" ]; then
+  ACCOUNT_ID="$(resolve_account_id)"
+  DEPLOY_BUCKET="appmod-deploy-${ACCOUNT_ID}-ap-northeast-1"
+  KEY="base/$(date -u +%Y%m%dT%H%M%SZ)-base.yaml"
+  # Ensure the deploy bucket exists (idempotent). Under dry-run both the head and the create are
+  # printed; in real mode the create runs only when the head misses, and BucketAlreadyOwnedByYou is
+  # treated as success. run_aws prepends --region; create-bucket also needs the explicit
+  # LocationConstraint to place the bucket in ap-northeast-1.
+  if [ -n "$DRY_RUN" ]; then
+    run_aws s3api head-bucket --bucket "$DEPLOY_BUCKET"
+    run_aws s3api create-bucket --bucket "$DEPLOY_BUCKET" --region ap-northeast-1 \
+      --create-bucket-configuration LocationConstraint=ap-northeast-1
+  elif ! run_aws s3api head-bucket --bucket "$DEPLOY_BUCKET" 2>/dev/null; then
+    bucket_err="$(mktemp)"
+    if ! run_aws s3api create-bucket --bucket "$DEPLOY_BUCKET" --region ap-northeast-1 \
+        --create-bucket-configuration LocationConstraint=ap-northeast-1 2>"$bucket_err"; then
+      if ! grep -q "BucketAlreadyOwnedByYou" "$bucket_err"; then
+        cat "$bucket_err" >&2
+        rm -f "$bucket_err"
+        echo "deploy: could not ensure the deploy bucket $DEPLOY_BUCKET; not deploying" >&2
+        exit 1
+      fi
+    fi
+    rm -f "$bucket_err"
+  fi
+  run_aws s3 cp "$TEMPLATE" "s3://$DEPLOY_BUCKET/$KEY"
+  echo "deploy: base template uploaded to s3://$DEPLOY_BUCKET/$KEY"
+  TEMPLATE_ARG=(--template-url "https://s3.ap-northeast-1.amazonaws.com/$DEPLOY_BUCKET/$KEY")
+fi
+
 echo "deploy: creating $STACK from $TEMPLATE in $REGION"
 # --on-failure DELETE so a failed base create does not leave half a stack billing; appdata is
 # DeletionPolicy Retain, so teardown.sh --after-failed-create handles a retained volume afterwards.
@@ -149,14 +198,14 @@ echo "deploy: creating $STACK from $TEMPLATE in $REGION"
 if [ "${#PARAMETERS[@]}" -gt 0 ]; then
   run_aws cloudformation create-stack \
     --stack-name "$STACK" \
-    --template-body "file://$TEMPLATE" \
+    "${TEMPLATE_ARG[@]}" \
     --capabilities CAPABILITY_NAMED_IAM \
     --on-failure DELETE \
     --parameters "${PARAMETERS[@]}"
 else
   run_aws cloudformation create-stack \
     --stack-name "$STACK" \
-    --template-body "file://$TEMPLATE" \
+    "${TEMPLATE_ARG[@]}" \
     --capabilities CAPABILITY_NAMED_IAM \
     --on-failure DELETE
 fi

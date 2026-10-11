@@ -74,6 +74,17 @@ Systems Manager の通信がエンドポイントを通ったかは確かめて�
 
 所要時間は 1 回の作成の値で、作成のたびに同じになるとは言えない。設計時の参考値（Hub の実測 43 分）より短かった。
 
+## 基盤スタックのテンプレート受け渡し
+
+手順 4 の `appmod-base` は `deploy.sh base` で作る。`templates/base.yaml` は 52,466 バイトで、
+CloudFormation の `--template-body` のインライン上限 51,200 バイトを超えるため、インライン渡しの
+`create-stack` は何も作る前に `ValidationError` で失敗する。そこで `deploy.sh` は専用のリージョン内
+デプロイバケット（`appmod-deploy-<account>-ap-northeast-1`）にテンプレートをアップロードし、
+`--template-url` で作成する。このバケットは base スタックが作る成果物バケットとは別で、再構築のたびに
+使うため削除せず残す。`teardown.sh` はこのバケットに触れない。`stage3-serverless.yaml` は 9,542 バイトで
+上限内なので、`--template-url` を使わず `--template-body` のままである。`--on-failure DELETE` と承認した
+`--parameters` は、どちらの渡し方でも変わらない。
+
 ## 作成後に判明した前提の不足
 
 > 証拠区分: `verified`（2026-10-07、ap-northeast-1、Windows Server 2022 の EC2 から確認）。
