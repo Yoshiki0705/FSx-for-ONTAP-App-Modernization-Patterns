@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    SDK-style console project targeting .NET 10 (LTS). Migrated from old-style ToolsVersion 4.0 /
+    .NET Framework 4.8 (ADR-1). AssemblyInfo moved to csproj props. System.Configuration
+    (ConfigurationManager) is dropped in favour of environment variables (AP-6, MP-25). JSON uses
+    System.Text.Json from the BCL — no NuGet dependency. App.config is no longer used.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>DocIntake.Worker</RootNamespace>
+    <AssemblyName>DocIntake.Worker</AssemblyName>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <Product>DocIntake</Product>
+    <AssemblyTitle>DocIntake.Worker</AssemblyTitle>
+    <Description>Document ingestion worker for the DocIntake sample app.</Description>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <ComVisible>false</ComVisible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DocIntake.Core\DocIntake.Core.csproj" />
+  </ItemGroup>
+
+</Project>

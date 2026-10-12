@@ -5,7 +5,8 @@ AWSTemplateFormatVersion: '2010-09-09'
 # (Fn::ImportValue) and never the reverse, so deleting this stack does not affect appmod-base.
 #
 # The function is the DocIntake .NET 10 Lambda (handler DocIntake.Lambda::DocIntake.Lambda.Function
-# ::Handler). Its source is not in this repository; the deployment zip is uploaded to the artifacts
+# ::Handler). Its source is app/modern/src/DocIntake.Lambda in this repository (packaging steps:
+# app/modern/src/DocIntake.Lambda/BUILD.md); the deployment zip is uploaded to the artifacts
 # bucket at LambdaPackageKey before create-stack. The region is pinned in the Rules block, which the
 # cfn-guard region_pinned rule verifies on this template too. The VPC and subnet come from the base
 # stack's exports, and the Lambda gets its own security group, so no resource ID is a parameter.

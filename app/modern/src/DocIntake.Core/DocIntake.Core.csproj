@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    SDK-style project targeting .NET 10 (LTS). Migrated from the old-style ToolsVersion 4.0 /
+    .NET Framework 4.8 project (ADR-1). AssemblyInfo attributes moved here from
+    Properties/AssemblyInfo.cs (which is removed). No NuGet dependencies.
+  -->
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>DocIntake.Core</RootNamespace>
+    <AssemblyName>DocIntake.Core</AssemblyName>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <!-- AssemblyInfo.cs を廃し、属性を csproj プロパティから生成する（既定の GenerateAssemblyInfo=true） -->
+    <Product>DocIntake</Product>
+    <AssemblyTitle>DocIntake.Core</AssemblyTitle>
+    <Description>File-store abstraction for the DocIntake sample app.</Description>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <ComVisible>false</ComVisible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned (exact) version — no range. S3FileStore (ADR-1) uses AWSSDK.S3 object operations
+         only (MP-27..30). Supply-chain discipline: exact pin, well-known package (awsdotnet). -->
+    <PackageReference Include="AWSSDK.S3" Version="4.0.104.2" />
+  </ItemGroup>
+
+</Project>

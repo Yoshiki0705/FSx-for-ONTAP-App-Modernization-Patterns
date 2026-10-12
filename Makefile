@@ -114,6 +114,12 @@ secrets: ## gitleaks で作業ツリーを走査（履歴全体は gitleaks work
 	$(call need,gitleaks,brew install gitleaks)
 	gitleaks dir . --config .gitleaks.toml --redact --exit-code 1 --no-banner
 
+.PHONY: app-modern
+app-modern: ## app/modern のビルドと単体テスト（dotnet SDK 10 必須。未導入・版違いは失敗）
+	$(call need,dotnet,https://dotnet.microsoft.com/download/dotnet/10.0)
+	@dotnet --version | grep -q '^10\.' || { echo "error: dotnet SDK 10 is required, found $$(dotnet --version)"; exit 1; }
+	dotnet build app/modern/DocIntake.sln -c Release --nologo
+	dotnet test app/modern/DocIntake.sln -c Release --no-build --nologo
 .PHONY: links
 links: ## 内部リンクの解決
 	$(PYTHON) tools/check_links.py
@@ -163,7 +169,7 @@ drift: ## 文書が挙げる make ターゲットが Makefile に実在するか
 	$(PYTHON) tools/check_make_targets.py
 
 .PHONY: ci
-ci: lint audit links drift test ## CI が呼ぶ集約ターゲット
+ci: lint audit links drift app-modern test ## CI が呼ぶ集約ターゲット
 
 .PHONY: all
 all: ci ## コミット前のゲート（ci と同じ）
