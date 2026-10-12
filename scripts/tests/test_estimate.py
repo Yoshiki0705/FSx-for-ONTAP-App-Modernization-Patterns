@@ -3,7 +3,7 @@
 
 Covers the design's test-plan rows for estimate.py: the arithmetic from a price fixture, input
 validation exit codes, the --elapsed 79% / 81% / no-record cases including "atx after base does not
-move the origin", the --target base minimum recheck (exit 4 on mismatch, exit 0 on match), and
+move the origin" and the latest base approval being the origin when several exist, the --target base minimum recheck (exit 4 on mismatch, exit 0 on match), and
 --target atx: --transformation / --limit-minutes required and allow-listed (exit 2 otherwise),
 refused on other targets, recorded as parameters, and priced as the ceiling N x unit price, with
 an expected $0 inside the AWS/dotnet-modernization quota. --target stage3: add-on line items only,
@@ -776,6 +776,128 @@ class ElapsedTests(unittest.TestCase):
             self.assertEqual(
                 estimate.main(["--elapsed", "--approval-file", str(path)]), 0
             )
+
+    def test_latest_base_approval_is_the_origin_regardless_of_list_order(self) -> None:
+        # Three base records, not in chronological order. The latest approved_at is the middle
+        # one (10h ago, 100h) -> 10%. The first record (500/24) or the last (300/24) would be far off.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            path = self._write_approval(
+                [
+                    {"target": "base", "approved_at": self._ago(500), "hours": 24},
+                    {"target": "base", "approved_at": self._ago(10), "hours": 100},
+                    {"target": "base", "approved_at": self._ago(300), "hours": 24},
+                ],
+                tmp,
+            )
+            self.assertAlmostEqual(estimate.elapsed_fraction(path), 0.10, delta=0.01)
+            self.assertEqual(
+                estimate.main(["--elapsed", "--approval-file", str(path)]), 0
+            )
+
+    def test_stale_first_base_does_not_trigger_false_alarm(self) -> None:
+        # A rebuilt environment adds a newer base record. The stale first record (120/24 = 500%)
+        # must not decide the result; the latest one is 24/72 = 33% -> exit 0.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            path = self._write_approval(
+                [
+                    {"target": "base", "approved_at": self._ago(120), "hours": 24},
+                    {"target": "base", "approved_at": self._ago(24), "hours": 72},
+                ],
+                tmp,
+            )
+            self.assertEqual(
+                estimate.main(["--elapsed", "--approval-file", str(path)]), 0
+            )
+
+    def test_single_base_approval_still_works(self) -> None:
+        # One base record, 10h ago over 100h -> 10%.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            path = self._write_approval(
+                [{"target": "base", "approved_at": self._ago(10), "hours": 100}], tmp
+            )
+            self.assertAlmostEqual(estimate.elapsed_fraction(path), 0.10, delta=0.01)
+            self.assertEqual(
+                estimate.main(["--elapsed", "--approval-file", str(path)]), 0
+            )
+
+    def test_no_base_with_other_approvals_still_exits_2(self) -> None:
+        # atx / stage3 / extend records alone are not a base approval -> InputError, exit 2.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            path = self._write_approval(
+                [
+                    {"target": "atx", "approved_at": self._ago(3)},
+                    {"target": "stage3", "approved_at": self._ago(2)},
+                    {"target": "extend", "approved_at": self._ago(1), "hours": 50},
+                ],
+                tmp,
+            )
+            with self.assertRaises(estimate.InputError):
+                estimate.elapsed_fraction(path)
+            self.assertEqual(
+                estimate.main(["--elapsed", "--approval-file", str(path)]), 2
+            )
+
+    def test_80_percent_boundary_with_multiple_bases(self) -> None:
+        # The comparison is fraction > 0.80. 81% exits 3 and 79% exits 0 with a stale base first.
+        # Exactly 80% is not tested: _utc_now() moves between the write and the call.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            path = self._write_approval(
+                [
+                    {"target": "base", "approved_at": self._ago(900), "hours": 24},
+                    {"target": "base", "approved_at": self._ago(81), "hours": 100},
+                ],
+                tmp,
+            )
+            self.assertEqual(
+                estimate.main(["--elapsed", "--approval-file", str(path)]), 3
+            )
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            path = self._write_approval(
+                [
+                    {"target": "base", "approved_at": self._ago(900), "hours": 24},
+                    {"target": "base", "approved_at": self._ago(79), "hours": 100},
+                ],
+                tmp,
+            )
+            self.assertEqual(
+                estimate.main(["--elapsed", "--approval-file", str(path)]), 0
+            )
+
+    def test_malformed_approved_at_on_a_base_record_exits_2(self) -> None:
+        # Fails closed: an unparseable approved_at on any base record is an input error,
+        # even when a valid, newer base record exists.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            path = self._write_approval(
+                [
+                    {"target": "base", "approved_at": "not-a-date", "hours": 24},
+                    {"target": "base", "approved_at": self._ago(10), "hours": 100},
+                ],
+                tmp,
+            )
+            self.assertEqual(
+                estimate.main(["--elapsed", "--approval-file", str(path)]), 2
+            )
+
+    def test_extend_hours_still_add_with_latest_base(self) -> None:
+        # Latest base 60h ago over 100h, extend +50h -> 60/150 = 40%. The stale base is ignored.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            path = self._write_approval(
+                [
+                    {"target": "base", "approved_at": self._ago(500), "hours": 24},
+                    {"target": "base", "approved_at": self._ago(60), "hours": 100},
+                    {"target": "extend", "approved_at": self._ago(5), "hours": 50},
+                ],
+                tmp,
+            )
+            self.assertAlmostEqual(estimate.elapsed_fraction(path), 0.40, delta=0.01)
 
 
 class MinimumRecheckTests(unittest.TestCase):

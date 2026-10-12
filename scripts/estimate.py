@@ -24,9 +24,9 @@ Three jobs, selected by flags:
                  assumed upper bound, CloudWatch Logs, and a $0 DISABLED schedule) and records the
                  stage-3 deploy parameters, which deploy.sh stage3 passes to create-stack.
   --elapsed      Compute the elapsed fraction of the approved base time from approval.json and
-                 return exit 3 when it exceeds 80%. The origin is always the base approval time; atx
-                 / stage3 / teardown / base-update approvals do not move it, extend hours add to the
-                 denominator.
+                 return exit 3 when it exceeds 80%. The origin is the approval time of the most
+                 recent base approval (largest approved_at); atx / stage3 / teardown / base-update
+                 approvals do not move it, extend hours add to the denominator.
 
 Exit codes: 0 ok; 1 Price List API unreachable (no estimate written); 2 invalid input; 3 elapsed
 fraction over 80%; 4 (--target base only) the fixed minimum no longer matches the current minimum.
@@ -751,7 +751,8 @@ def write_estimate(
 def elapsed_fraction(approval_file: Path) -> float:
     """Return elapsed-time fraction against the base approval. Raises InputError (exit 2).
 
-    The origin is the base approval time. extend hours add to the denominator. atx / stage3 /
+    The origin is the approval time of the most recent base approval (largest approved_at); older
+    base approvals are superseded. extend hours add to the denominator. atx / stage3 /
     teardown / base-update approvals do not change the origin or the denominator.
     """
     if not approval_file.exists():
@@ -765,10 +766,11 @@ def elapsed_fraction(approval_file: Path) -> float:
     if not isinstance(approvals, list):
         raise InputError("approval.json must be a JSON array of approval records")
 
-    base = next((a for a in approvals if a.get("target") == "base"), None)
-    if base is None:
+    base_records = [a for a in approvals if a.get("target") == "base"]
+    if not base_records:
         raise InputError("approval.json has no 'base' approval")
     try:
+        base = max(base_records, key=lambda a: _parse_iso(a["approved_at"]))
         origin = _parse_iso(base["approved_at"])
         denom = float(base["hours"])
     except (KeyError, ValueError) as exc:
