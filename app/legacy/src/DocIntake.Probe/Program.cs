@@ -63,31 +63,64 @@ namespace DocIntake.Probe
             }
             catch (Exception ex)
             {
+                // A failed control keeps what was observed (and why it is not a measurement).
+                var control = ex as PositiveControlAbsentException;
+                var kept = control != null ? control.Observed : string.Empty;
                 return "{\"id\": \"" + id + "\", \"started_at\": \"" + started
-                    + "\", \"outcome\": \"error\", \"observed\": {\"topology\": \"cross-host\"}, "
-                    + "\"error_type\": \"" + ex.GetType().Name + "\"}";
+                    + "\", \"outcome\": \"error\", \"observed\": {\"topology\": \"cross-host\"" + kept
+                    + "}, \"error_type\": \"" + ex.GetType().Name + "\"}";
             }
+        }
+
+        // Thrown when the control of a measurement is absent, so the result must not be recorded as
+        // measured. Observed carries the JSON fragment (leading comma, no braces) to keep.
+        internal sealed class PositiveControlAbsentException : Exception
+        {
+            public PositiveControlAbsentException(string observed)
+                : base("positive control did not resolve")
+            {
+                Observed = observed;
+            }
+
+            public string Observed { get; private set; }
         }
 
         private static string CaseSensitivity(IFileStore store)
         {
-            // Reference the index by the mixed-case name and record whether it resolves.
-            var resolved = false;
+            // Read the real file (positive control) and its wrong-case spelling, both under seed\.
+            // Without the control, "wrong case did not resolve" cannot be told apart from "absent".
+            var resolved = Resolves(store, StorePaths.IndexReference);
+            var realResolved = Resolves(store, StorePaths.IndexReal);
+            var observed = ", \"reference\": \"" + StorePaths.IndexReference.Replace("\\", "\\\\")
+                + "\", \"resolved\": " + (resolved ? "true" : "false")
+                + ", \"real\": \"" + StorePaths.IndexReal.Replace("\\", "\\\\")
+                + "\", \"real_resolved\": " + (realResolved ? "true" : "false");
+            if (!realResolved)
+            {
+                throw new PositiveControlAbsentException(
+                    observed + ", \"reason\": \"positive control "
+                    + StorePaths.IndexReal.Replace("\\", "\\\\")
+                    + " did not resolve; case sensitivity cannot be concluded\"");
+            }
+            return observed;
+        }
+
+        // A missing file or directory is "not resolved"; any other failure propagates as an error.
+        private static bool Resolves(IFileStore store, string relativePath)
+        {
             try
             {
-                store.Read(StorePaths.IndexReference);
-                resolved = true;
+                store.Read(relativePath);
+                return true;
             }
             catch (FileNotFoundException)
             {
-                resolved = false;
+                return false;
             }
             catch (DirectoryNotFoundException)
             {
-                resolved = false;
+                return false;
             }
-            return ", \"reference\": \"" + StorePaths.IndexReference.Replace("\\", "\\\\")
-                + "\", \"resolved\": " + (resolved ? "true" : "false");
         }
 
         private static string PathSeparator(IFileStore store)
