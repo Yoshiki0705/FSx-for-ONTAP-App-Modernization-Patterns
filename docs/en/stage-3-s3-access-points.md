@@ -1,16 +1,20 @@
 # Stage 3: partial serverless via S3 Access Points
 
-> Evidence tier: `hypothesis` (not measured). The steps are a plan and the predictions are
-> pre-measurement hypotheses, replaced by records.
-> The AWS specifications below (supported operations, runtime deprecation dates, billing items) are
-> facts stated in documentation, each with a source.
-> Whether this configuration works has not been confirmed, because it has not been deployed.
+> Evidence tier: shown per section. AWS specifications (supported operations, runtime deprecation
+> dates, billing items) are `documented`, each with a source. Deployment and Lambda invocation results
+> are `verified`, results written as a single observation are `field-observation`, anything not run is
+> `hypothesis`, and anything with neither a public primary source nor a reproduction record is `open`.
+> Unless stated otherwise the environment is ap-northeast-1, ONTAP 9.19.1P3, Single-AZ, one volume
+> `appdata` (security style `ntfs`). Measurement run ids are `s3-20261011T212200Z` (2026-10-11 to 12),
+> `s3b-20261012T022900Z` (2026-10-12) and `s3m-20261012T104800Z` (2026-10-12).
 
 Attach FSx for ONTAP S3 Access Points to the `appdata` target volume of Amazon FSx for NetApp ONTAP and
 run the Worker and the Probe (S3 variant) from AWS Lambda. The volume is not cloned and the data is
 not moved.
 
-## Planned configuration
+## Configuration
+
+The design in the template `templates/stage3-serverless.yaml`:
 
 | Element | Content |
 |---|---|
@@ -22,7 +26,16 @@ not moved.
 | IAM | `s3:ListBucket` on the S3 Access Points ARN, `s3:GetObject` and `s3:PutObject` on its `/object/*`, and read/write on the artifacts bucket only. `s3:DeleteObject` is not granted (stage-3 code does not delete) |
 | Schedule | An Amazon EventBridge Scheduler schedule `appmod-stage3-worker-poll` (every 5 minutes) is created `DISABLED`. Measurements are invoked manually |
 
-## Planned steps
+Deployment result (`verified`): the stack was created and deleted 3 times (`s3-20261011T212200Z`,
+`s3b-20261012T022900Z`, `s3m-20261012T104800Z`). `AWS::FSx::S3AccessPointAttachment` reached
+`CREATE_COMPLETE` and the lifecycle reached `AVAILABLE`. The file-system identity type was WINDOWS
+(`APPMOD\appsvc`) and the network origin was VPC. Deletion completed with `delete-stack`; the wait for
+the deletion in `s3-20261011T212200Z` exceeded 20 minutes (single observation). No attachment whose
+name starts with `appmod` remained after deletion.
+
+## Steps
+
+The deployment was carried out in this order. The creation time was not recorded.
 
 1. Confirm the Lambda subnet's route tables carry the S3 prefix list
 2. Build the `DocIntake.Lambda` zip (`dotnet publish -r linux-x64 --self-contained false`) and place it at `lambda/worker.zip` in the artifacts bucket
@@ -51,6 +64,18 @@ To run the schedule, call `aws scheduler update-schedule` with the definition re
 so passing only `State` loses the other values. Return it to `DISABLED` after measuring (`teardown.sh`
 also sets `DISABLED` before deleting).
 
+### Lambda execution results
+
+> `verified`, single observation each. Runtime `dotnet10`, ONTAP 9.19.1P3. Time and memory come from
+> the Lambda record; items not in the record are written "not recorded".
+
+| Run id | Invocation | Result | Duration | Max memory |
+|---|---|---|---|---|
+| `s3-20261011T212200Z` (earlier implementation) | worker | `exit_code` 0. `out/s3/reports/doc-001` to `005.txt.txt` and `index.json` confirmed from the NFS side | 2,505 ms (first invocation, Init 361 ms) | 115 MB |
+| `s3-20261011T212200Z` | probe | of the 5 behaviors, 4 `measured` and 1 `skipped` (file-locking) | 821 ms | 120 MB |
+| `s3m-20261012T104800Z` (AIMF-derived code) | worker | `exit_code` 0. `out/s3/` rewritten; `index.json` is 181 bytes (compact JSON, ADR-4), 5 reports | not recorded | not recorded |
+| `s3m-20261012T104800Z` | probe | 4 `measured`, 1 `skipped` (file-locking) | not recorded | not recorded |
+
 ## The five behaviors in the S3 variant
 
 A behavior that does not hold under the S3 API is recorded as `skipped`, with the reason in
@@ -58,8 +83,8 @@ A behavior that does not hold under the S3 API is recorded as `skipped`, with th
 
 | Behavior | Handling in the S3 variant | `outcome` |
 |---|---|---|
-| `case-sensitivity` | Request `Docs/Index.json` and `docs/index.json` with `GetObject` and record whether each was found | `measured` |
-| `path-separator` | Run `PutObject` with a key containing `\` (`probe\sep-check-s3.txt`) and record whether it reads back. The file names produced on the SMB and NFS sides are checked in each host's inventory | `measured` |
+| `case-sensitivity` | With `GetObject`, request `seed/Docs/Index.json` (changed spelling) and the real `seed/docs/index.json` (positive control), and record whether each was found. `measured` only when the positive control was found | `measured` |
+| `path-separator` | Run `PutObject` with a key containing `\` and record whether it reads back. The key is `probe/sep\check-s3.txt` (the earlier implementation used `probe\sep-check-s3.txt`; it was moved under `probe/` to avoid the trap in "Effect of a `\` key written at the volume root on the SMB side" below). The file names produced on the SMB and NFS sides are checked in each host's inventory | `measured` |
 | `file-locking` | Not measured, because the S3 API has no operation that opens exclusively | `skipped` |
 | `acl-evaluation` | Recorded as `skipped` because the S3 API has no pre-check; the success or failure of an actual `PutObject` to `probe/<run-id>/deny-appsvc.txt` is recorded | `measured` |
 | `write-visibility` | `PutObject` a marker object and record its key | `measured` |
@@ -69,6 +94,91 @@ A behavior that does not hold under the S3 API is recorded as `skipped`, with th
 The stage-3 Probe does not call this check, however. The outcome of `PutObject` and `GetObject` while
 Windows holds the file open with `FileShare.None` (`observed.under_smb_lock`) is measured with a pair of
 hosts, and is not part of this single invocation.
+
+## Measured results of the five behaviors in the S3 variant
+
+> `verified`, single observation each. The run id and date are on each row. The result is `measured` or
+> `skipped`, in the same categories as the table above.
+
+| Behavior | Result | Run id |
+|---|---|---|
+| `case-sensitivity` | The reference `seed/Docs/Index.json` did not resolve (`resolved=false`) and the positive control `seed/docs/index.json` resolved (`real_resolved=true`). Through S3 Access Points, keys are case-sensitive | `s3b-20261012T022900Z`, `s3m-20261012T104800Z` (both 2026-10-12; same result) |
+| `path-separator` | `PutObject` with a key containing `\` succeeded and read back (`read_back=true`). `\` is treated as an ordinary character. Where the object lands on the volume depends on how the key is written (next section) | `s3b-20261012T022900Z` (key `probe\sep-check-s3.txt`), `s3m-20261012T104800Z` (key `probe/sep\check-s3.txt`) |
+| `file-locking` | `skipped` (the S3 API has no exclusive-open operation) | the same in all 3 runs |
+| `acl-evaluation` | `precheck` was `skipped`, and `PutObject` to `probe/<run-id>/deny-appsvc.txt` was allowed (`io_put_allowed=true`). A case where it is not allowed (the false side) was not observed | `s3-20261011T212200Z`, `s3b-20261012T022900Z`, `s3m-20261012T104800Z` |
+| `write-visibility` | A marker object was written and its key recorded. The time difference was not measured (it needs a pair of hosts) | the same in all 3 runs |
+
+- The `case-sensitivity` of the earlier `s3-20261011T212200Z` had a positive control that did not resolve
+  (`real_resolved=false`) and is not used as a conclusion. It was re-measured in `s3b-20261012T022900Z`
+  with the reference moved under `seed/`. A measurement without a positive control reads equally as
+  "case-sensitive" or "not found" when the result is false, so it is not a conclusion.
+- The output of this Probe prints `topology: cross-host` even for a single Lambda invocation. This is a
+  fixed label and not evidence that two hosts coordinated. Two-host coordination counts only the pairs
+  that `probe_merge.py` judged `cross-host` (`reasons` empty).
+- What to do: keys through S3 Access Points are case-sensitive. Code that worked over SMB will not find a
+  file if it requests the same name from S3 with a different spelling. S3 has no exclusive-open
+  operation, so put processing that needs exclusive control on the NFS or SMB route.
+
+## Effect of a `\` key written at the volume root on the SMB side
+
+> `verified` (the failure and the later pass of the check). The correspondence between the short name
+> and the long name is an inference (`field-observation`). ONTAP 9.19.1P3, Single-AZ, one volume.
+
+In an S3 key `\` is an ordinary character. When a key containing `\`, such as `probe\sep-check-s3.txt`,
+was written directly under the bucket, a one-byte file whose name contains `\` appeared directly under
+the volume root. The name showed up in the SMB-side top-level listing as the 8.3 short name
+`PROBES~1.TXT`, and `check-invariant.py`, which allows only `out`, `probe` and `seed` at the top level,
+failed (the `b3` of `s3-20261011T212200Z`, the `b2` of `s2m-20261012T090934Z`, and the `b3` of
+`s3m-20261012T104800Z`; 2026-10-12).
+
+- The correspondence between the short name and the long name is an inference. The long name was not
+  requested and matched on the SMB side; it is read from `PROBES~1.TXT` also disappearing from the listing
+  after the long-named file was deleted on the NFS side.
+- Fix 1: the Probe key was moved under `probe/` (`probe/sep\check-s3.txt`). In `s3m-20261012T104800Z` the
+  new key did not appear at the volume root and became a file inside `probe/`.
+- Fix 2: the file already at the volume root was deleted by running `rm` once over NFS as UNIX uid 10001.
+  When `b3` was taken again after the deletion (`s3m-20261012T104800Z-clean`), `top_level_paths` was the
+  three entries `out`, `probe` and `seed`, and `check-invariant.py` passed (exit code 0). The deletion is
+  a write, so it was done with separate approval. There were 0 snapshots, so there is no way to undo this
+  deletion.
+- What to do: run checks that write keys containing `\` only under a dedicated prefix such as `probe/`,
+  and never directly at the volume root. If one is written there, the SMB-side top level is polluted and
+  undoing it needs a delete (a write).
+
+## Name mapping that appears only while S3 Access Points are attached
+
+> `field-observation`. A single observation in `s3-20261011T212200Z`; reproduction in other
+> configurations is unconfirmed.
+
+In the `b3` taken while attached, ONTAP had 5 name mappings, one of which was `s3_win` (replacement
+`APPMOD\appsvc`). Read again after `appmod-stage3` was deleted, `s3_win` was gone and the count was back
+to the same 4 as `b2`. It appeared with the attachment and disappeared with the deletion. It matches
+the access point's file-system identity (WINDOWS, `APPMOD\appsvc`) and the replacement. In
+`s3m-20261012T104800Z`, with AIMF-derived code, the boundary was taken after the stack was deleted, so
+this mapping was not observed (4 mappings, no `s3_win`).
+
+- Whether the attachment process of FSx for ONTAP created this mapping has not been confirmed in the
+  ONTAP and AWS documentation.
+- What to do: when comparing the name-mapping count across boundary records, note whether the access
+  point was attached. A record taken while attached and one taken after deletion can differ by one.
+
+## Reachability on an AD-joined SVM and `HeadBucket`
+
+> `open`. This Spoke did not run a test that makes the Active Directory domain controller (DC)
+> unreachable.
+
+Two statements, "on an AD-joined SVM every data operation on S3 Access Points needs reachability to the
+AD DC" and "when the DC is unreachable only `HeadBucket` succeeds", have neither a public primary source
+nor a reproduction record, and the Hub note
+[What an endpoint needs to reach S3 Access Points](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/client-access/notes/what-an-endpoint-needs-to-reach-s3-access-points.md)
+(Japanese) also treats them as `open`. This document treats them as `open` too and does not call them
+`verified` or `documented`.
+
+What can be said with confidence is limited. `HeadBucket` checks that the bucket (access point) exists
+and does not show whether files can be read or written. What to do: do not judge connectivity from a
+successful `HeadBucket` alone; confirm it with the data operations you actually use (`GetObject`,
+`ListObjectsV2`, `PutObject`). Stage 3 of this Spoke confirmed connectivity with data operations
+(`s3b-20261012T022900Z`, `s3m-20261012T104800Z`).
 
 ## Scope of the stage-3 estimate
 
@@ -116,11 +226,23 @@ The estimate also records the `parameters` to be approved (`BaseStackName`, `Lam
 specified). `deploy.sh stage3` passes them through unchanged, and rejects an estimate whose
 `parameters` are missing or empty, as it does for `base` (exit code 2).
 
+## Estimates used for the runs
+
+The estimates approved for the three stage-3 runs totaled $0.04 (2026-10-11), $0.01 (2026-10-12 02:19Z)
+and $0.01 (2026-10-12 10:35Z), in that order. These are upper-bound calculations (unit price × quantity),
+not invoiced amounts. Invoices have not been observed; the Cost Explorer check is due on 2026-10-13.
+
 ## What to confirm at the boundary
 
 - The target volume UUID and the `seed/` inventory are identical to stage 0
 - The security style is still `ntfs`
 - The S3 Access Points target is `appdata`
+
+Result (`verified`): the UUID, security style, `seed/` inventory, export policy, snapshots and snapshot
+locking were unchanged from `b0`, and `check-no-locking.sh` passed. `check-invariant.py` failed because
+of `PROBES~1.TXT` at the root and passed after that file was deleted and `b3` was taken again
+(`s3m-20261012T104800Z-clean`). Details are in "Effect of a `\` key written at the volume root on the SMB
+side" above.
 
 ## Sources for the claims
 
@@ -132,9 +254,26 @@ S3 Access Points constraints are cited per claim from Hub notes (contents are no
 - Lambda runtimes and deprecation dates: [Lambda runtimes](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html) (checked 2026-10-11)
 - The unit prices of S3 requests through S3 Access Points, and that data transfer is billed: [Amazon FSx for NetApp ONTAP pricing](https://aws.amazon.com/fsx/netapp-ontap/pricing/), English page, tab "S3 Access Points for FSx" (checked 2026-10-12) <!-- allow:naming -->
 - The same unit prices as AWS Price List API SKUs: service code `AmazonS3`, usagetypes `APN1-Requests-FSXONTAP-Tier1` (SKU `ZE45RAAH9EX5HNT4`) and `APN1-Requests-FSXONTAP-Tier2` (SKU `W647VRU94Q4WFUS7`), Asia Pacific (Tokyo), read 2026-10-12
+- DC reachability on an AD-joined SVM and `HeadBucket` (`open`): [What an endpoint needs to reach S3 Access Points](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/domains/client-access/notes/what-an-endpoint-needs-to-reach-s3-access-points.md) (Japanese)
 
-## Predictions (unverified)
+## Results and predictions by tier
 
-- S3 Access Points are expected to attach on this configuration (`SINGLE_AZ_1`, AD-joined SVM, NTFS volume) (unconfirmed).
-- Because S3 Access Points emit no event notification, the trigger is a scheduled poll. In the stage-3 measurements, the schedule stays `DISABLED` and is invoked manually.
-- Reads and writes by the Worker and the Probe are expected to pass within the IAM scope above (no `DeleteObject`) (unconfirmed).
+Moved to results (`verified`):
+
+- S3 Access Points could be attached on this configuration (`SINGLE_AZ_1`, AD-joined SVM, NTFS volume)
+  (3 times, "Configuration" above).
+- Within the IAM scope above (no `DeleteObject`), the Worker's and the Probe's reads and writes passed.
+  The Probe does not call `CanWrite`, and the Worker does not delete (`s3-20261011T212200Z`,
+  `s3m-20261012T104800Z`).
+
+Left as `hypothesis`:
+
+- Because S3 Access Points emit no event notification, the trigger is a scheduled poll. In the stage-3
+  measurements the schedule stayed `DISABLED` and was invoked manually. A polling invocation was not run.
+- Running on `provided.al2023` rather than the managed runtime `dotnet10`. Not tried.
+
+`open`: whether every data operation on an AD-joined SVM needs DC reachability, and whether only
+`HeadBucket` succeeds when the DC is unreachable ("Reachability on an AD-joined SVM and `HeadBucket`" above).
+
+Not measured: security style `unix` and `mixed`, ONTAP versions other than 9.19.1P3, Multi-AZ, other
+volume layouts, invoiced amounts, and the time to create the Lambda.

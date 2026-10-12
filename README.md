@@ -5,8 +5,10 @@
 Amazon FSx for NetApp ONTAP にデータを置いたまま、Windows 上の .NET Framework アプリケーションを段階的に Linux 上の .NET、さらに一部サーバーレスへ移すための検証済みパターン集です。
 データの置き場所は FSx for ONTAP のボリュームから動かさず、アプリケーション側とプロトコル側を 1 段ずつ変えます。
 
-> **状態**: 雛形の段階です。各段階の手順・テンプレート・検証結果は、検証が済んだものから追加します。
-> 現時点で検証済みの段階はありません。
+> **状態**: 段階 0 から 3 を計測済みです。ONTAP 9.19.1P2（2026-10-07 の初回構築）と 9.19.1P3（2026-10-11〜12 の再構築）で、Single-AZ、1 ボリューム、セキュリティスタイル ntfs の構成を対象にしました。
+> 計測値は各 1 回の観測が中心で、各文書に run id、日付、環境、証拠区分を書いています。
+> 未計測の範囲は次のとおりです: セキュリティスタイル unix と mixed、他の ONTAP の版、Multi-AZ、コンテナ分岐、請求額（見積りのみで、請求額は未観測）。
+> これらは `hypothesis` として扱います。
 
 ## このリポジトリの範囲
 
@@ -29,15 +31,31 @@ Windows のクライアントが残っている間は、ボリュームのセキ
 | 3 | 一部の処理をサーバーレスへ | FSx for ONTAP S3 Access Points | ファイルを読む処理の一部を、S3 Access Points 経由で AWS Lambda などから扱う |
 | 分岐 | コンテナ（Amazon ECS / Amazon EKS） | NFS / SMB / S3 Access Points | 段階 1 以降のどこからでも分岐できる。詳細は隣の Spoke を参照する |
 
+## 文書の索引
+
+| 読みたいこと | 参照先 |
+|---|---|
+| 段階 0: SMB と NTFS の出発点 | [段階 0](docs/ja/stage-0-smb-ntfs.md) |
+| 段階 1: 同じボリュームへの NFS の追加 | [段階 1](docs/ja/stage-1-multiprotocol.md) |
+| 段階 2: Linux 上の新しい .NET への移行（AIMF のセッション記録を含む） | [段階 2](docs/ja/stage-2-aimf-modern-dotnet.md) |
+| 段階 3: S3 Access Points による一部サーバーレス化 | [段階 3](docs/ja/stage-3-s3-access-points.md) |
+| 検証方法から得た教訓（対照のない計測は結果にならない、など） | [検証方法の教訓](docs/ja/verification-method-lessons.md) |
+| 検証環境の構成と費用の見積り | [検証環境](docs/ja/environment.md) |
+| サンプルアプリケーションの構成と 5 つの挙動 | [サンプルアプリ](docs/ja/sample-app.md) |
+| コンテナ分岐（未計測） | [分岐: コンテナ化](docs/ja/branch-containerization.md) |
+
+英語版は [docs/en/](docs/en/stage-0-smb-ntfs.md) にあり、節構造は日本語版と一致させています。
+
 ## 検証環境の前提
 
 | 項目 | 値 |
 |---|---|
 | リージョン | ap-northeast-1（FSx for ONTAP を含むインフラ） |
-| FSx for ONTAP | 検証専用に新しく作るファイルシステム。Single-AZ、ストレージ容量とスループット容量は最小構成 |
+| FSx for ONTAP | 検証専用に新しく作るファイルシステム。Single-AZ、ストレージ容量とスループット容量は最小構成。計測した ONTAP の版は 9.19.1P2（2026-10-07）と 9.19.1P3（2026-10-11〜12） |
+| セキュリティスタイル | ntfs（段階 2 の決定で維持。決定者は利用者） |
 | ディレクトリ | AWS Managed Microsoft AD |
 | IaC | AWS CloudFormation（YAML）。`cfn-lint` と `cfn-guard` を通す |
-| AIMF | v0.11.0 に固定 |
+| AIMF | v0.11.0 に固定。2026-10-12 のセッションは kiro-cli 2.29.1 の V2 対話モードで実施 |
 
 **SnapLock と snapshot locking（Tamperproof Snapshot）は使いません。** どちらも保持期間が満了するまでボリュームを削除できなくする機能で、検証用のファイルシステムに置くと削除できない請求が残ります。
 不可逆操作の扱いは [AGENTS.md](AGENTS.md) にあります。
@@ -50,6 +68,7 @@ AWS へのデプロイは、構成・所要時間・費用の見積りを提示�
 対象はアプリケーション自体の移行で、クラウド環境の設計と構築は対象外とされています。
 このリポジトリは段階 2 で AIMF を使い、AIMF が扱わないストレージ側の前提（共有パス、権限の対応付け、プロトコルの切り替え）を補足として持ちます。
 AIMF が作る作業記録のリポジトリは公開しない作業領域に置き、公開するのは結果の抜粋だけです。
+2026-10-12 に実施したセッションの手順、ADR の要旨、ハーネスが機械的に止める範囲と止めない範囲は[段階 2](docs/ja/stage-2-aimf-modern-dotnet.md)にあります。
 
 ## 関連リポジトリ
 
