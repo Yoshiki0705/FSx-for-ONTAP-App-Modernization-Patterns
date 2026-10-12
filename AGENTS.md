@@ -28,12 +28,13 @@ Bilingual: Japanese is primary (`README.md`, `docs/ja/`), English mirrors it (`R
 
 ```bash
 make install   # .venv with the pins in requirements-dev.txt (ruff, cfn-lint)
-make all       # lint + audit + links + test: the commit gate
+make all       # lint + audit + links + drift + test: the commit gate
 ```
 
 Never read a gate's result off a pipe. `make all | tail` returns tail's status. Use
 `make all > /tmp/all.log 2>&1; echo $?`. Every gate fails when its tool is missing. Gate
-inventory: [docs/agent/quality-gates.md](docs/agent/quality-gates.md).
+inventory: [docs/agent/quality-gates.md](docs/agent/quality-gates.md). `make drift` fails when this
+file or `CONTRIBUTING.md` names a `make` target that the Makefile does not define.
 
 ## Naming (applies to every file, diagram, comment, and commit)
 
@@ -117,3 +118,8 @@ duration, and cost estimate. Verification runs only on a dedicated file system c
 - PR title `<type>: <description>`, under 70 characters; enforced by
   `.github/workflows/pr-title-check.yml`. Squash merge is the default.
 - Run `make all` after the final edit and before every commit.
+- Before merging, run `make pr-verify PR=<number>`. It keys every lookup on the head SHA, because
+  `gh pr checks` shows the latest results and can return the previous commit's verdict after a
+  push. It exits 0 only when every pull_request workflow completed with success for that SHA,
+  1 on a failure or a workflow with no run yet, and 2 while runs are still going
+  (`WAIT=<seconds>` polls). It needs `gh` and the network, so it is not part of `make all`.

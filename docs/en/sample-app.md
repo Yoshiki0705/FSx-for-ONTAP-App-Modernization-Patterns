@@ -41,7 +41,8 @@ once each.
 
 The Probe emits observations only, as JSON. `outcome` is one of `measured`, `error`, `skipped`.
 The `ok` / `differs` / `not-comparable` verdict is assigned by `scripts/compare-probe.py` against
-stage 0.
+stage 0. A `case-sensitivity` record without a positive control (`observed.real_resolved` true) is
+`invalid` and the script exits with code 3.
 
 ```json
 {
