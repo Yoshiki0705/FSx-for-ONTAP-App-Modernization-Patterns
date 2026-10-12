@@ -28,12 +28,13 @@ Bilingual: Japanese is primary (`README.md`, `docs/ja/`), English mirrors it (`R
 
 ```bash
 make install   # .venv with the pins in requirements-dev.txt (ruff, cfn-lint)
-make all       # lint + audit + links + test: the commit gate
+make all       # lint + audit + links + drift + test: the commit gate
 ```
 
 Never read a gate's result off a pipe. `make all | tail` returns tail's status. Use
 `make all > /tmp/all.log 2>&1; echo $?`. Every gate fails when its tool is missing. Gate
-inventory: [docs/agent/quality-gates.md](docs/agent/quality-gates.md).
+inventory: [docs/agent/quality-gates.md](docs/agent/quality-gates.md). `make drift` fails when this
+file or `CONTRIBUTING.md` names a `make` target that the Makefile does not define.
 
 ## Naming (applies to every file, diagram, comment, and commit)
 

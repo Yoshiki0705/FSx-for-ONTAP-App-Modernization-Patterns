@@ -15,6 +15,7 @@ the same tree with the same tool versions. `make all` runs everything and is the
 | `audit` | `tools/audit_public_output.py`, then `secrets` | Naming, neutrality, and PII over files git would commit |
 | `secrets` | gitleaks (`.gitleaks.toml`) | Secrets in the working tree; CI scans full history |
 | `links` | `tools/check_links.py` | Internal Markdown links resolve |
+| `drift` | `tools/check_make_targets.py` | Every `make` target named in code spans or code blocks of `AGENTS.md` and `CONTRIBUTING.md` has a rule in the Makefile; a missing file is skipped |
 | `test` | unittest, `--selftest` | Detector tests, the irreversible-operation guard, and the audit's own rules |
 
 `make pr-verify PR=<number>` is the merge gate and is not part of `make all`, because it needs
