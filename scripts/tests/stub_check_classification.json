@@ -37,6 +37,14 @@
       "class": "pure",
       "reason": "runs on the Linux client; assembles a new directory from a shipped payload and verifies it locally, refusing an existing destination and a payload hash mismatch; no AWS call"
     },
+    "scripts/measure/host/read-out.sh": {
+      "class": "pure",
+      "reason": "runs on the Linux client; read-only dump of recorded Worker output and the seed inventory as the NFS uid, no AWS call"
+    },
+    "scripts/measure/host/run-worker.sh": {
+      "class": "pure",
+      "reason": "runs on the Linux client; refuses an unset or malformed stage and an existing out/<stage>, then runs the published Worker as the NFS uid; deletes and moves nothing, no AWS call"
+    },
     "scripts/measure/host/standalone-probe.sh": {
       "class": "pure",
       "reason": "runs on the Linux client; lists the volume, runs the published Probe over NFS then cifs, deletes and moves nothing, no AWS call"

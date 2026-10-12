@@ -53,7 +53,7 @@ Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
 def _check(pattern: re.Pattern[str], value: str, what: str, hint: str) -> str:
-    if not isinstance(value, str) or not pattern.match(value):
+    if not isinstance(value, str) or not pattern.fullmatch(value):
         raise ValueError(f"invalid {what}: {value!r} ({hint})")
     return value
 
