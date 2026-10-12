@@ -136,7 +136,9 @@ TEST_DIRS := scripts/tests
 PY_UNITTEST := tools.test_ai_style scripts.tests.test_estimate scripts.tests.test_readonly_scripts \
                scripts.tests.test_reuse_permutations scripts.tests.test_probe_merge \
                scripts.tests.test_no_stub_scripts scripts.tests.test_pr_verify \
-               scripts.tests.test_check_make_targets
+               scripts.tests.test_check_make_targets \
+               scripts.tests.test_measure_ssm_run scripts.tests.test_measure_ship_build \
+               scripts.tests.test_measure_standalone_probe
 
 .PHONY: test
 test: ## 検出器の unittest、スクリプトの単体テスト、ガード・フック・シェルの自己テスト
