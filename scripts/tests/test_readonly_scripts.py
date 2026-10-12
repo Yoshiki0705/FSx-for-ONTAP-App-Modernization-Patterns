@@ -7,7 +7,9 @@ happens; every input is an in-test JSON record.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
@@ -292,6 +294,212 @@ class CompareProbeTests(unittest.TestCase):
                 ),
                 1,
             )
+
+
+CS = "case-sensitivity"
+
+
+def cs_valid(resolved=True, real_resolved=True):
+    """A case-sensitivity observation that carries its positive control (Probe from stage 2 on)."""
+    return {
+        "reference": "seed/Docs/Index.json",
+        "resolved": resolved,
+        "real": "seed/docs/index.json",
+        "real_resolved": real_resolved,
+        "topology": "cross-host",
+    }
+
+
+# Shape recorded by the stage-0 Probe: a reference that did not resolve and nothing to show the
+# lookup could have succeeded. Recorded as "measured" in the baseline runs.
+CS_STAGE0 = {
+    "topology": "cross-host",
+    "reference": "Docs\\Index.json",
+    "resolved": False,
+}
+
+
+def cs_probe(observed, outcome="measured"):
+    return probe([{"id": CS, "outcome": outcome, "observed": observed}])
+
+
+def cs_merged(per_side):
+    return {"topology": "cross-host", "per_side": per_side}
+
+
+def run_main(base, res):
+    """Run compare.main on two Probe records; return (exit code, stdout, stderr)."""
+    out, err = io.StringIO(), io.StringIO()
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        (tmp / "base.json").write_text(json.dumps(base), encoding="utf-8")
+        (tmp / "res.json").write_text(json.dumps(res), encoding="utf-8")
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = compare.main(
+                [
+                    "--baseline",
+                    str(tmp / "base.json"),
+                    "--result",
+                    str(tmp / "res.json"),
+                ]
+            )
+    return code, out.getvalue(), err.getvalue()
+
+
+class CaseSensitivityControlTests(unittest.TestCase):
+    def test_valid_vs_valid_is_ok_and_exits_0(self) -> None:
+        base, res = cs_probe(cs_valid()), cs_probe(cs_valid())
+        self.assertEqual(compare.compare(base, res), {CS: "ok"})
+        code, out, _ = run_main(base, res)
+        self.assertEqual((code, out.strip()), (0, f"{CS}: ok"))
+
+    def test_valid_vs_valid_differs_still_exits_0(self) -> None:
+        # A case-sensitive store (resolved false) against a case-insensitive one is a finding, not
+        # an invalid record: both have their control.
+        base, res = (
+            cs_probe(cs_valid(resolved=True)),
+            cs_probe(cs_valid(resolved=False)),
+        )
+        self.assertEqual(compare.compare(base, res), {CS: "differs"})
+        self.assertEqual(run_main(base, res)[0], 0)
+
+    def test_baseline_without_control_is_invalid_exit_3(self) -> None:
+        no_control = cs_valid()
+        del no_control["real_resolved"]
+        base, res = cs_probe(no_control), cs_probe(cs_valid())
+        self.assertEqual(compare.compare(base, res), {CS: "invalid"})
+        code, out, err = run_main(base, res)
+        self.assertEqual(code, compare.EXIT_NO_CONTROL)
+        self.assertEqual(compare.EXIT_NO_CONTROL, 3)
+        self.assertEqual(
+            out.strip(), f"{CS}: invalid (no positive control in baseline)"
+        )
+        self.assertIn("without a positive control", err)
+
+    def test_result_with_real_resolved_false_is_invalid(self) -> None:
+        base, res = cs_probe(cs_valid()), cs_probe(cs_valid(real_resolved=False))
+        self.assertEqual(compare.compare(base, res), {CS: "invalid"})
+        code, out, _ = run_main(base, res)
+        self.assertEqual(code, 3)
+        self.assertEqual(out.strip(), f"{CS}: invalid (no positive control in result)")
+
+    def test_both_sides_without_control(self) -> None:
+        base, res = cs_probe(CS_STAGE0), cs_probe(dict(CS_STAGE0))
+        code, out, _ = run_main(base, res)
+        self.assertEqual(code, 3)
+        self.assertEqual(out.strip(), f"{CS}: invalid (no positive control in both)")
+
+    def test_real_resolved_must_be_boolean_true(self) -> None:
+        base, res = cs_probe(cs_valid(real_resolved="true")), cs_probe(cs_valid())
+        self.assertEqual(compare.compare(base, res), {CS: "invalid"})
+
+    def test_stage0_shaped_baseline_against_valid_result(self) -> None:
+        # Identical "resolved: false" would have compared ok before; with no control it says nothing.
+        base, res = cs_probe(CS_STAGE0), cs_probe(cs_valid(resolved=False))
+        self.assertEqual(
+            compare.control_gap(base["behaviors"][0], res["behaviors"][0]), "baseline"
+        )
+        code, out, _ = run_main(base, res)
+        self.assertEqual(code, 3)
+        self.assertEqual(
+            out.strip(), f"{CS}: invalid (no positive control in baseline)"
+        )
+
+    def test_peer_script_record_is_invalid(self) -> None:
+        # probe_peer.py records only distinct_case_files, never a control.
+        peer = {"distinct_case_files": False, "topology": "cross-host"}
+        self.assertEqual(
+            compare.compare(cs_probe(peer), cs_probe(cs_valid())), {CS: "invalid"}
+        )
+
+    def test_error_outcome_without_control_is_still_error_exit_0(self) -> None:
+        # The Probe reports a missing control as outcome "error"; that path is unchanged.
+        base, res = cs_probe(cs_valid()), cs_probe({"topology": "cross-host"}, "error")
+        self.assertEqual(compare.compare(base, res), {CS: "error"})
+        self.assertEqual(run_main(base, res)[0], 0)
+
+    def test_other_behaviors_do_not_need_a_control(self) -> None:
+        base, res = (
+            probe([behavior("acl-evaluation")]),
+            probe([behavior("acl-evaluation")]),
+        )
+        self.assertEqual(compare.compare(base, res), {"acl-evaluation": "ok"})
+        self.assertEqual(run_main(base, res)[0], 0)
+
+    def test_topology_mismatch_still_exits_1_when_also_invalid(self) -> None:
+        base = probe([behavior("file-locking"), cs_probe(CS_STAGE0)["behaviors"][0]])
+        res = probe(
+            [
+                behavior("file-locking", topology="same-host"),
+                cs_probe(cs_valid())["behaviors"][0],
+            ]
+        )
+        self.assertEqual(run_main(base, res)[0], 1)
+
+    def test_merged_all_sides_valid_is_ok_with_new_side_no_baseline(self) -> None:
+        base = cs_probe(
+            cs_merged({"windows.json": cs_valid(), "linux-smb.json": cs_valid()})
+        )
+        res = cs_probe(
+            cs_merged(
+                {
+                    "windows.json": cs_valid(),
+                    "linux-smb.json": cs_valid(),
+                    "linux-nfs.json": cs_valid(resolved=False),
+                }
+            )
+        )
+        self.assertEqual(compare.compare(base, res), {CS: "ok"})
+        code, out, _ = run_main(base, res)
+        self.assertEqual(code, 0)
+        self.assertIn("linux-nfs.json: no-baseline", out)
+
+    def test_merged_baseline_side_without_control_is_invalid_for_that_side(
+        self,
+    ) -> None:
+        base = cs_probe(
+            cs_merged({"windows.json": cs_valid(), "linux-smb.json": CS_STAGE0})
+        )
+        res = cs_probe(
+            cs_merged({"windows.json": cs_valid(), "linux-smb.json": cs_valid()})
+        )
+        self.assertEqual(compare.compare(base, res), {CS: "invalid"})
+        self.assertEqual(
+            compare.side_verdicts(
+                base["behaviors"][0]["observed"],
+                res["behaviors"][0]["observed"],
+                check_control=True,
+            ),
+            {"linux-smb.json": "invalid", "windows.json": "ok"},
+        )
+        code, out, _ = run_main(base, res)
+        self.assertEqual(code, 3)
+        self.assertIn(f"{CS}: invalid (no positive control in baseline)", out)
+        self.assertIn(
+            "  linux-smb.json: invalid (no positive control in baseline)", out
+        )
+        self.assertIn("  windows.json: ok", out)
+
+    def test_merged_result_only_side_without_control_is_invalid(self) -> None:
+        base = cs_probe(cs_merged({"windows.json": cs_valid()}))
+        res = cs_probe(
+            cs_merged(
+                {"windows.json": cs_valid(), "linux-nfs.json": {"resolved": False}}
+            )
+        )
+        self.assertEqual(
+            compare.control_gap(base["behaviors"][0], res["behaviors"][0]), "result"
+        )
+        code, out, _ = run_main(base, res)
+        self.assertEqual(code, 3)
+        self.assertIn("  linux-nfs.json: invalid (no positive control in result)", out)
+
+    def test_merged_record_with_no_sides_has_no_control(self) -> None:
+        base, res = (
+            cs_probe(cs_merged({})),
+            cs_probe(cs_merged({"windows.json": cs_valid()})),
+        )
+        self.assertEqual(compare.compare(base, res), {CS: "invalid"})
 
 
 def rc(logical_id, replacement):

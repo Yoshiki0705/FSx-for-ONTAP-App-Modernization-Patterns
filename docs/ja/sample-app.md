@@ -38,6 +38,7 @@ DB と認証を持たない。外部の OSS を検証対象にせず、観測点
 
 Probe は観測値だけを JSON で出す。`outcome` は `measured`・`error`・`skipped` の 3 値。
 `ok` / `differs` / `not-comparable` の判定は `scripts/compare-probe.py` が段階 0 と比べて行う。
+`case-sensitivity` は陽性対照（`observed.real_resolved` が true）のない記録を `invalid` とし、終了コード 3 で終わる。
 
 ```json
 {
