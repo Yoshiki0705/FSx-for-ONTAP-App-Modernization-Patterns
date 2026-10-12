@@ -117,3 +117,8 @@ duration, and cost estimate. Verification runs only on a dedicated file system c
 - PR title `<type>: <description>`, under 70 characters; enforced by
   `.github/workflows/pr-title-check.yml`. Squash merge is the default.
 - Run `make all` after the final edit and before every commit.
+- Before merging, run `make pr-verify PR=<number>`. It keys every lookup on the head SHA, because
+  `gh pr checks` shows the latest results and can return the previous commit's verdict after a
+  push. It exits 0 only when every pull_request workflow completed with success for that SHA,
+  1 on a failure or a workflow with no run yet, and 2 while runs are still going
+  (`WAIT=<seconds>` polls). It needs `gh` and the network, so it is not part of `make all`.

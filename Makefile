@@ -118,12 +118,18 @@ secrets: ## gitleaks で作業ツリーを走査（履歴全体は gitleaks work
 links: ## 内部リンクの解決
 	$(PYTHON) tools/check_links.py
 
+# Not part of `ci` or `all`: it needs the network, gh, and a pushed pull request.
+.PHONY: pr-verify
+pr-verify: ## PR の head SHA に対する CI の合否（PR=<番号> 必須、WAIT=<秒> 任意）
+	@case "$(PR)" in ''|*[!0-9]*) echo "error: PR is required and must be a number. Run: make pr-verify PR=<number>"; exit 1;; esac
+	$(PYTHON) tools/pr_verify.py --pr "$(PR)" $(if $(WAIT),--wait "$(WAIT)")
+
 # Test directories live here so a tests/ directory not listed runs nowhere; test-coverage below
 # fails when a test file on disk is not reached by this target.
 TEST_DIRS := scripts/tests
 PY_UNITTEST := tools.test_ai_style scripts.tests.test_estimate scripts.tests.test_readonly_scripts \
                scripts.tests.test_reuse_permutations scripts.tests.test_probe_merge \
-               scripts.tests.test_no_stub_scripts
+               scripts.tests.test_no_stub_scripts scripts.tests.test_pr_verify
 
 .PHONY: test
 test: ## 検出器の unittest、スクリプトの単体テスト、ガード・フック・シェルの自己テスト
