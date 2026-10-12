@@ -65,6 +65,27 @@ With the endpoints in a single AZ, both the SVM domain join (confirmed by a disc
 controller) and Systems Manager Run Command worked. The VPC also had an internet gateway, and
 whether the Systems Manager traffic went through the endpoints was not checked.
 
+![Test environment. The Windows EC2 instance reaches FSx for ONTAP over SMB, and the Linux EC2 instance over NFS 4.1 and SMB 3.0. A Lambda function in the VPC reaches FSx for ONTAP S3 Access Points through the S3 gateway endpoint. FSx for ONTAP joins AWS Managed Microsoft AD, and Secrets Manager holds the admin passwords.](../_assets/images/environment-architecture-en.svg)
+
+Dark version: [SVG](../_assets/images/environment-architecture-en-dark.svg) / [PNG](../_assets/images/png/environment-architecture-en-dark@2x.png). Light version as PNG: [PNG](../_assets/images/png/environment-architecture-en@2x.png).
+
+The access paths in the figure are the same as in the table below; no fact appears only in the figure.
+
+| Origin | Path | Destination |
+|---|---|---|
+| Windows EC2 | SMB | FSx for ONTAP volume `appdata` |
+| Linux EC2 | NFS 4.1; SMB 3.0 is also used | FSx for ONTAP volume `appdata` |
+| Lambda in the VPC | S3 API, then the S3 gateway endpoint, then FSx for ONTAP S3 Access Points | FSx for ONTAP volume `appdata` |
+| Both clients | Fetch credentials from Secrets Manager | Logon at run time and operations |
+| FSx for ONTAP SVM | Domain join | AWS Managed Microsoft AD |
+| Lambda in the VPC | The same S3 gateway endpoint | The artifacts bucket in Amazon S3 |
+
+The three notes in the figure, in prose:
+
+- The file system is Single-AZ. The second subnet exists because AWS Managed Microsoft AD needs two AZs. The file system, both clients, and the Lambda function sit in the first subnet.
+- The network origin of the S3 Access Points is the VPC. A Lambda function inside the VPC reaches it through the S3 gateway endpoint, and the artifacts bucket goes through the same endpoint.
+- Passwords are resolved from Secrets Manager secrets. They are read when AWS Managed Microsoft AD and the ONTAP `fsxadmin` account are created, and both clients also fetch them at run time. Operations ran through AWS Systems Manager Run Command.
+
 ## Creation steps and measured duration
 
 > Evidence tier: `verified` (2026-10-07, ap-northeast-1). The approval time (06:07:17 UTC) comes

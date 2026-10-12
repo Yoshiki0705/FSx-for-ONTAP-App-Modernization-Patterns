@@ -73,6 +73,22 @@ atx は AWS Transform custom の CLI で、ap-northeast-1 のレジストリに 
 | 2 | atx の 2 変換、AIMF セッション、`app/modern` の配置と計測 | ADR、近代化後アプリ、Linux の Probe と Worker の結果 | `.private/aimf/`、`.private/runs/s2m-<UTC>/` ほか |
 | 3 | `deploy.sh stage3`、`lambda_invoke.py` | `appmod-stage3`、Lambda の worker と probe の結果、`b3` | `.private/runs/s3m-<UTC>/` |
 
+![段階 0 から 3 までの流れ。Windows EC2 は SMB 3.0、Linux EC2 は NFS 4.1、段階 2 の Linux EC2 は NFS 4.1 と cifs 3.0、段階 3 の Lambda は S3 Access Points で、いずれも 1 つのボリューム appdata に届く。](../_assets/images/appmod-stage-flow.svg)
+
+ダーク版: [SVG](../_assets/images/appmod-stage-flow-dark.svg) / [PNG](../_assets/images/png/appmod-stage-flow-dark@2x.png)。ライト版の PNG: [PNG](../_assets/images/png/appmod-stage-flow@2x.png)。
+
+図が示す内容は次の表と同じで、図にしか書かれていない事実はない。
+
+| 段階 | 実行環境 | 経路 | ボリュームへの到達 |
+|---|---|---|---|
+| 0 | Windows EC2、.NET Framework 4.8 | SMB 3.0 | 同じボリューム `appdata` |
+| 1 | 段階 0 に Linux EC2 を追加。SMB も継続 | NFS 4.1 | 同じボリューム `appdata` |
+| 2 | Linux EC2、.NET 10。AIMF v0.11.0 を kiro-cli で実行し、atx の分析結果を入力にした | NFS 4.1 と cifs 3.0 | 同じボリューム `appdata` |
+| 3 | AWS Lambda、.NET 10 | S3 API から FSx for ONTAP S3 Access Points | 同じボリューム `appdata` |
+| 分岐 | コンテナ移行（段階 1 以降の分岐） | この検証では測っていない | 矢印は引いていない |
+
+atx の dotnet-modernization による変換は、AIMF とは別に比較用として実行した。AIMF の Phase 0a は atx の分析結果を取り込んだ。データは段階 0 から 3 まで動かさず、変わるのは経路である。
+
 run id は `s<段階の数字>[英小文字 0 から 2 字]-<UTC の YYYYMMDDTHHMMSSZ>` の形にする。ドライバとホスト側のスクリプトは、
 この形に合わない値を拒否する。UTC 部分は `date -u +%Y%m%dT%H%M%SZ` で作る。
 

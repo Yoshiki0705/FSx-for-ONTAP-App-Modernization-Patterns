@@ -77,6 +77,22 @@ Each stage builds on the configuration of the previous one. The single volume `a
 | 2 | The two atx transformations, the AIMF session, placing and measuring `app/modern` | ADRs, the modernized app, Probe and Worker results on Linux | `.private/aimf/`, `.private/runs/s2m-<UTC>/` and others |
 | 3 | `deploy.sh stage3`, `lambda_invoke.py` | `appmod-stage3`, Lambda worker and probe results, `b3` | `.private/runs/s3m-<UTC>/` |
 
+![Stage flow from stage 0 to 3. The Windows EC2 instance uses SMB 3.0, the Linux EC2 instance uses NFS 4.1, the stage 2 Linux EC2 instance uses NFS 4.1 and cifs 3.0, and the stage 3 Lambda function uses S3 Access Points. All reach one volume, appdata.](../_assets/images/appmod-stage-flow-en.svg)
+
+Dark version: [SVG](../_assets/images/appmod-stage-flow-en-dark.svg) / [PNG](../_assets/images/png/appmod-stage-flow-en-dark@2x.png). Light version as PNG: [PNG](../_assets/images/png/appmod-stage-flow-en@2x.png).
+
+The table below carries the same content as the figure; no fact appears only in the figure.
+
+| Stage | Runtime | Access path | Reach to the volume |
+|---|---|---|---|
+| 0 | Windows EC2, .NET Framework 4.8 | SMB 3.0 | The same volume, `appdata` |
+| 1 | A Linux EC2 instance added to stage 0; SMB continues | NFS 4.1 | The same volume, `appdata` |
+| 2 | Linux EC2, .NET 10. AIMF v0.11.0 run through kiro-cli, with the atx analysis as input | NFS 4.1 and cifs 3.0 | The same volume, `appdata` |
+| 3 | AWS Lambda, .NET 10 | S3 API to FSx for ONTAP S3 Access Points | The same volume, `appdata` |
+| Branch | Container migration (a branch from stage 1 onward) | Not measured here | No arrow is drawn |
+
+The atx dotnet-modernization transformation was run separately from AIMF, as a comparison. AIMF Phase 0a took in the atx analysis. The data does not move from stage 0 to 3; only the access path changes.
+
 A run id has the form `s<stage digit>[0 to 2 lowercase letters]-<UTC as YYYYMMDDTHHMMSSZ>`. The drivers and
 the host-side scripts reject a value that does not match this form. Build the UTC part with
 `date -u +%Y%m%dT%H%M%SZ`.

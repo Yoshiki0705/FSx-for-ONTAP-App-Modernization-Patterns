@@ -9,6 +9,8 @@ the same tree with the same tool versions. `make all` runs everything and is the
 | `headings` | `tools/check_heading_style.py` | Japanese section headings are noun phrases |
 | `role-labels` | `tools/check_role_labels.py` | No callout label claims a job title or persona |
 | `ai-style` | `tools/ai_style_rules.py` | Writing-style signals; fail tier only |
+| `diagram-fonts` | `tools/check_diagram_fonts.py` | Label size in `docs/_assets/diagrams/*.drawio` and the exported SVGs meets the readability floor |
+| `diagram-flow` | `tools/check_diagram_flow.py` | Diagrams read rightwards and downwards, and labels sit under their icons |
 | `python` | ruff (pinned in `requirements-dev.txt`) | Lint and format of `tools/` and `scripts/`; fails when the ruff on `PATH` is not the pinned version |
 | `shell` | shellcheck | Every tracked `*.sh` |
 | `cfn` | cfn-lint and cfn-guard | Every template under `templates/`, found recursively, against rules in `guard/` |
@@ -31,7 +33,8 @@ A workflow with a `paths:` filter is required only when a changed file matches i
 Each detector runs its selftest before scanning, so a rule that stopped matching fails the gate
 instead of reporting an empty result as a pass.
 
-`tools/check_links.py`, `tools/frontmatter.py`, and `tools/ai_style_rules.py` are copied from the
+`tools/check_links.py`, `tools/frontmatter.py`, `tools/ai_style_rules.py`,
+`tools/check_diagram_fonts.py`, and `tools/check_diagram_flow.py` are copied from the
 Hub; `tools/check_heading_style.py`, `tools/check_role_labels.py`, and `tools/test_ai_style.py`
 from the Container-Datastore Spoke. `scripts/guard_irreversible_ops.py` is a byte-identical copy
 of the Hub's guard.

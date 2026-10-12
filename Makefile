@@ -84,6 +84,16 @@ ai-style: ## AI 調の兆候を検査（fail tier で落とす）
 	@$(PYTHON) tools/ai_style_rules.py $(AI_STYLE_PATHS) --summary
 	$(PYTHON) tools/ai_style_rules.py $(AI_STYLE_PATHS) --fail
 
+.PHONY: diagram-fonts
+diagram-fonts: ## 図のラベルが可読性の下限を満たすか
+	@$(PYTHON) tools/check_diagram_fonts.py --selftest >/dev/null
+	$(PYTHON) tools/check_diagram_fonts.py
+
+.PHONY: diagram-flow
+diagram-flow: ## 図が右と下へ読めるか、ラベルがアイコンの下にあるか
+	@$(PYTHON) tools/check_diagram_flow.py --selftest >/dev/null
+	$(PYTHON) tools/check_diagram_flow.py
+
 .PHONY: shell
 shell: ## shellcheck（未導入は失敗。対象 0 本ならその旨を出す）
 	$(call need,shellcheck,brew install shellcheck)
@@ -102,7 +112,7 @@ cfn: ## cfn-lint と cfn-guard（templates/ 配下を再帰で走査）
 	fi
 
 .PHONY: lint
-lint: markdown headings role-labels ai-style python shell cfn ## 文書と Python・シェル・CFn の静的検査
+lint: markdown headings role-labels ai-style diagram-fonts diagram-flow python shell cfn ## 文書と Python・シェル・CFn の静的検査
 
 .PHONY: audit
 audit: secrets ## 公開物の監査（命名・中立性・PII）と gitleaks

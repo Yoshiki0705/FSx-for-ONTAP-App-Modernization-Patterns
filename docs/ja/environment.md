@@ -59,6 +59,27 @@ snapshot locking には AWS API のパラメータがないので、cfn-guard �
 Systems Manager の Run Command はどちらも動いた。VPC にはインターネットゲートウェイもあり、
 Systems Manager の通信がエンドポイントを通ったかは確かめていない。
 
+![実験環境の構成。Windows EC2 は SMB、Linux EC2 は NFS 4.1 と SMB 3.0 で FSx for ONTAP に届く。VPC 内の Lambda は S3 ゲートウェイエンドポイントを経由して FSx for ONTAP S3 Access Points に届く。FSx for ONTAP は AWS Managed Microsoft AD に参加し、Secrets Manager が管理者パスワードを保持する。](../_assets/images/environment-architecture.svg)
+
+ダーク版: [SVG](../_assets/images/environment-architecture-dark.svg) / [PNG](../_assets/images/png/environment-architecture-dark@2x.png)。ライト版の PNG: [PNG](../_assets/images/png/environment-architecture@2x.png)。
+
+図が示す経路は次の表と同じで、図にしか書かれていない事実はない。
+
+| 起点 | 経路 | 到達先 |
+|---|---|---|
+| Windows EC2 | SMB | FSx for ONTAP のボリューム `appdata` |
+| Linux EC2 | NFS 4.1、SMB 3.0 も使う | FSx for ONTAP のボリューム `appdata` |
+| VPC 内の Lambda | S3 API、S3 ゲートウェイエンドポイント、FSx for ONTAP S3 Access Points の順 | FSx for ONTAP のボリューム `appdata` |
+| 両クライアント | Secrets Manager から認証情報を取得 | 実行時のログオンと運用操作 |
+| FSx for ONTAP の SVM | ドメイン参加 | AWS Managed Microsoft AD |
+| VPC 内の Lambda | 同じ S3 ゲートウェイエンドポイント | Amazon S3 の成果物バケット |
+
+図の補足 3 点は次のとおり。
+
+- ファイルシステムは Single-AZ である。2 つ目のサブネットは AWS Managed Microsoft AD が 2 AZ を要するために用意した。ファイルシステム、両クライアント、Lambda は 1 つ目のサブネットに置く。
+- S3 Access Points のネットワーク起点は VPC である。VPC 内の Lambda は S3 ゲートウェイエンドポイントを通って届き、成果物バケットも同じエンドポイントを通る。
+- パスワードは Secrets Manager のシークレットから解決する。AWS Managed Microsoft AD と ONTAP の `fsxadmin` の作成時に参照し、両クライアントも実行時に取得する。運用操作は AWS Systems Manager の Run Command で行った。
+
 ## 作成の手順と所要時間の実測
 
 > 証拠区分: `verified`（2026-10-07、ap-northeast-1）。承認時刻（06:07:17 UTC）は承認記録による。
