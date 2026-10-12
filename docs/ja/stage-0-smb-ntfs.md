@@ -63,8 +63,10 @@ Windows EC2 上の .NET Framework 4.8 アプリが、NTFS セキュリティス�
 ## 再構築環境での再計測（verified、1 回ずつ）
 
 > 証拠区分: `verified`。環境はすべて ap-northeast-1、ONTAP 9.19.1P3、Single-AZ、1 ファイルシステム、
-> 1 SVM、1 ボリューム `appdata`（security style `ntfs`）。NFS の export を設定する前の状態で、
-> 結果はいずれも 1 回の観測である。再現は未確認。
+> 1 SVM、1 ボリューム `appdata`（security style `ntfs`）。段階 1 の NFS 設定（export policy `appmod_nfs` と
+> name mapping）を入れる前の状態で、実行前の境界記録（`s0-20261011T065443Z`）には組み込みの export policy
+> 2 つ（各 1 規則）、name mapping 0 件、Linux 側の一覧なし（空）が残っている。結果はいずれも 1 回の観測である。
+> 再現は未確認。
 
 ### SMB 同士の 2 台協調（run id `s0-20261011T065443Z`、2026-10-11）
 
@@ -114,7 +116,7 @@ UNC 共有）から引いた。誤った綴りの参照も解決し（`resolved=
   判定した組だけである。読者が取る行動は、`topology` の値ではなく統合後の `reasons` が空かどうかで判定すること。
 - 2 台の組を同期させた計測は、2026-10-07 の段階 1 で初めて行った（[段階 1](stage-1-multiprotocol.md)）。その環境には
   NFS の export があったので、その run の SMB 同士の組は段階 0 の基準値には読み替えない。
-  SMB だけの構成での 2 台協調の基準は、NFS の export を設定する前の 2026-10-11 の run
+  SMB だけの構成での 2 台協調の基準は、段階 1 の NFS 設定を入れる前の 2026-10-11 の run
   `s0-20261011T065443Z`（上の「SMB 同士の 2 台協調」）で得た。この基準は 1 回ずつの観測である。
 
 ## この段階で判明した所見（手順への反映）

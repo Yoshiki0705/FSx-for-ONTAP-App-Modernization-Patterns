@@ -39,6 +39,7 @@ Windows のクライアントが残っている間は、ボリュームのセキ
 | 段階 1: 同じボリュームへの NFS の追加 | [段階 1](docs/ja/stage-1-multiprotocol.md) |
 | 段階 2: Linux 上の新しい .NET への移行（AIMF のセッション記録を含む） | [段階 2](docs/ja/stage-2-aimf-modern-dotnet.md) |
 | 段階 3: S3 Access Points による一部サーバーレス化 | [段階 3](docs/ja/stage-3-s3-access-points.md) |
+| 検証方法から得た教訓（対照のない計測は結果にならない、など） | [検証方法の教訓](docs/ja/verification-method-lessons.md) |
 | 検証環境の構成と費用の見積り | [検証環境](docs/ja/environment.md) |
 | サンプルアプリケーションの構成と 5 つの挙動 | [サンプルアプリ](docs/ja/sample-app.md) |
 | コンテナ分岐（未計測） | [分岐: コンテナ化](docs/ja/branch-containerization.md) |

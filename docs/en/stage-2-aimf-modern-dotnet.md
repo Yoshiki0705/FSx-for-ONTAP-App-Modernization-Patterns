@@ -77,7 +77,7 @@ The result of one session on 2026-10-12, from the record (one run).
 | ADR-4 | `index.json` becomes compact JSON (the `System.Text.Json` default). The success check changes from byte-for-byte to JSON equivalence (keys, values, array order) |
 | ADR-5 | `OpenExclusive` on S3 stays `NotSupportedException` and is tracked in ledger item AP-14, because S3 has no exclusive-open operation |
 
-- Independent verification ran once. The missing-feature lens was REFUTED and the scope lens was UPHELD (1 finding). The finding was handled in ADR-5 and AP-14, with 0 items carried over.
+- Independent verification ran once. The missing-feature check was REFUTED and the scope check was UPHELD (1 finding). The finding was handled in ADR-5 and AP-14, with 0 items carried over.
 - Negative test: a temporary violating file was injected to confirm the detectors catch AP-1 to AP-13 (13 caught, 0 missed, 2026-10-12).
 - The session used about 284 Kiro credits. The user set the cap to 5,000. This document does not
   convert credits into an amount.
@@ -194,7 +194,7 @@ original code and an environment that can confirm the build first.
 | Output | 11 files rewritten. Five embedded behaviors remained (next section) | Ledger AP-1 to AP-14, ADR-1 to ADR-5, `NfsFileStore` and `S3FileStore`, and the independent verification record |
 | First run on Linux | some behaviors `error` (`s2-20261011T125351Z`); `measured` after manual fixes (`s2f`, `s2g`) | all 19 Probe records `measured`, 0 `error` (`s2m-20261012T090934Z`) |
 | What it needs beforehand | A separate copy that keeps the original code. A workstation that can confirm the build | Session design, user approvals, credential isolation, Kiro credits |
-| Constraints | It does not create an environment-specific storage layer (such as one for NFS). Billing is in agent minutes | It needs human judgement and approval time. It uses credits |
+| Constraints | In the single 2026-10-11 run, no NFS store implementation was added (item 5 in the next section). Billing is in agent minutes | It needs human judgement and approval time. It uses credits |
 
 The choice depends on the use. If you want the transformed code with one command and plan to fix it
 up yourself, atx `AWS/dotnet-modernization` suits. If you want the migration decisions (ADRs) and the

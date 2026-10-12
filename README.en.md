@@ -39,6 +39,7 @@ The volume keeps the NTFS security style for as long as Windows clients remain.
 | Stage 1: adding NFS to the same volume | [Stage 1](docs/en/stage-1-multiprotocol.md) |
 | Stage 2: migrating to modern .NET on Linux (includes the AIMF session record) | [Stage 2](docs/en/stage-2-aimf-modern-dotnet.md) |
 | Stage 3: partial serverless via S3 Access Points | [Stage 3](docs/en/stage-3-s3-access-points.md) |
+| Lessons from the verification method (a measurement without a positive control is not a result, and others) | [Verification method lessons](docs/en/verification-method-lessons.md) |
 | Environment structure and cost estimates | [Verification environment](docs/en/environment.md) |
 | Sample application structure and the five behaviors | [Sample app](docs/en/sample-app.md) |
 | Container branch (not measured) | [Branch: containerization](docs/en/branch-containerization.md) |

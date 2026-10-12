@@ -70,8 +70,10 @@ Carried out in two builds, 2026-10-07 (ONTAP 9.19.1P2) and 2026-10-11 (9.19.1P3)
 ## Re-measurement on the rebuilt environment (verified, once each)
 
 > Evidence tier: `verified`. Everything below is ap-northeast-1, ONTAP 9.19.1P3, Single-AZ, one file
-> system, one SVM, one volume `appdata` (security style `ntfs`), measured before the NFS export was
-> configured. Each result is a single observation; repeatability is not confirmed.
+> system, one SVM, one volume `appdata` (security style `ntfs`), measured before the stage-1 NFS setup
+> (export policy `appmod_nfs` and name mappings) was applied. The pre-run boundary record
+> (`s0-20261011T065443Z`) shows the two built-in export policies (one rule each), 0 name mappings and an
+> empty Linux inventory. Each result is a single observation; repeatability is not confirmed.
 
 ### Two coordinated SMB clients (run id `s0-20261011T065443Z`, 2026-10-11)
 
@@ -127,7 +129,7 @@ case. Single observation. Results per access path, including Linux cifs and NFS,
 - The first coordinated two-client measurement was made at stage 1 on 2026-10-07
   ([stage 1](stage-1-multiprotocol.md)). That environment already had the NFS export, so the
   SMB-to-SMB pairs of that run are not read back as a stage-0 baseline. The two-client baseline for an
-  SMB-only configuration was taken before the NFS export was configured, in the 2026-10-11 run
+  SMB-only configuration was taken before the stage-1 NFS setup was applied, in the 2026-10-11 run
   `s0-20261011T065443Z` ("Two coordinated SMB clients" above). That baseline is a single observation
   per pair.
 
