@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    AIMF-internal unit tests for S3FileStore (Step 6). Uses a fake in-memory IAmazonS3 (Moq) — no
+    real AWS connection. All NuGet versions are exact-pinned (no ranges), per supply-chain
+    discipline. Real S3 Access Point verification is AIMF-external (SC-5 real side).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
+    <PackageReference Include="Moq" Version="4.21.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DocIntake.Core\DocIntake.Core.csproj" />
+    <ProjectReference Include="..\..\src\DocIntake.Probe\DocIntake.Probe.csproj" />
+    <ProjectReference Include="..\..\src\DocIntake.Worker\DocIntake.Worker.csproj" />
+    <ProjectReference Include="..\..\src\DocIntake.Lambda\DocIntake.Lambda.csproj" />
+  </ItemGroup>
+
+</Project>

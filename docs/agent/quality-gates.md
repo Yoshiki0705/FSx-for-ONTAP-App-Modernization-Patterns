@@ -9,6 +9,8 @@ the same tree with the same tool versions. `make all` runs everything and is the
 | `headings` | `tools/check_heading_style.py` | Japanese section headings are noun phrases |
 | `role-labels` | `tools/check_role_labels.py` | No callout label claims a job title or persona |
 | `ai-style` | `tools/ai_style_rules.py` | Writing-style signals; fail tier only |
+| `diagram-fonts` | `tools/check_diagram_fonts.py` | Label size in `docs/_assets/diagrams/*.drawio` and the exported SVGs meets the readability floor |
+| `diagram-flow` | `tools/check_diagram_flow.py` | Diagrams read rightwards and downwards, and labels sit under their icons |
 | `python` | ruff (pinned in `requirements-dev.txt`) | Lint and format of `tools/` and `scripts/`; fails when the ruff on `PATH` is not the pinned version |
 | `shell` | shellcheck | Every tracked `*.sh` |
 | `cfn` | cfn-lint and cfn-guard | Every template under `templates/`, found recursively, against rules in `guard/` |
@@ -16,6 +18,7 @@ the same tree with the same tool versions. `make all` runs everything and is the
 | `secrets` | gitleaks (`.gitleaks.toml`) | Secrets in the working tree; CI scans full history |
 | `links` | `tools/check_links.py` | Internal Markdown links resolve |
 | `drift` | `tools/check_make_targets.py` | Every `make` target named in code spans or code blocks of `AGENTS.md` and `CONTRIBUTING.md` has a rule in the Makefile; a missing file is skipped |
+| `app-modern` | dotnet SDK 10 | `dotnet build` and `dotnet test` of `app/modern/DocIntake.sln` in Release; fails when the SDK is missing or is not version 10 |
 | `test` | unittest, `--selftest` | Detector tests, the irreversible-operation guard, and the audit's own rules |
 
 `make pr-verify PR=<number>` is the merge gate and is not part of `make all`, because it needs
@@ -26,10 +29,12 @@ latest-results view of `gh pr checks` can return the previous commit's verdict. 
 failure or a missing run, exit 2 is "still running", and `WAIT=<seconds>` polls every 30 seconds.
 A workflow with a `paths:` filter is required only when a changed file matches it.
 
+`app/legacy` (.NET Framework 4.8) is not built by any gate, because it does not build on the Linux CI runner.
 Each detector runs its selftest before scanning, so a rule that stopped matching fails the gate
 instead of reporting an empty result as a pass.
 
-`tools/check_links.py`, `tools/frontmatter.py`, and `tools/ai_style_rules.py` are copied from the
+`tools/check_links.py`, `tools/frontmatter.py`, `tools/ai_style_rules.py`,
+`tools/check_diagram_fonts.py`, and `tools/check_diagram_flow.py` are copied from the
 Hub; `tools/check_heading_style.py`, `tools/check_role_labels.py`, and `tools/test_ai_style.py`
 from the Container-Datastore Spoke. `scripts/guard_irreversible_ops.py` is a byte-identical copy
 of the Hub's guard.

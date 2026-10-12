@@ -35,6 +35,7 @@ The volume keeps the NTFS security style for as long as Windows clients remain.
 
 | To read about | Go to |
 |---|---|
+| Reproducing the verification in your own environment, in order (prerequisites, estimate and approval, stages 0 to 3, teardown, what cannot be reproduced) | [Reproduction guide](docs/en/reproduce.md) |
 | Stage 0: the SMB and NTFS starting point | [Stage 0](docs/en/stage-0-smb-ntfs.md) |
 | Stage 1: adding NFS to the same volume | [Stage 1](docs/en/stage-1-multiprotocol.md) |
 | Stage 2: migrating to modern .NET on Linux (includes the AIMF session record) | [Stage 2](docs/en/stage-2-aimf-modern-dotnet.md) |

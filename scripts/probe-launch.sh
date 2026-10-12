@@ -8,6 +8,10 @@
 #   probe-launch.sh --store smb|nfs --stage <0..3> --role <role> --run-id <id> [--region r]
 #                   [--svm-netbios APPMODSVM01]
 #
+# APPMOD_PROBE_BIN (optional): absolute path to a published Probe executable (for example the
+# migrated .NET Probe). When set, it is run directly instead of `python3 probe_peer.py`, with the
+# same arguments. When unset, the command line is the one this launcher has always used.
+#
 set -euo pipefail
 
 STORE="" ; STAGE="" ; ROLE="" ; RUN_ID=""
@@ -15,6 +19,7 @@ PAIR_BEHAVIOR="" ; SYNC_ID="" ; BUCKET=""
 REGION="${APPMOD_REGION:-ap-northeast-1}"
 SVM_NETBIOS="${APPMOD_SVM_NETBIOS:-APPMODSVM01}"
 PROBE="/opt/appmod/probe_peer.py"
+PROBE_BIN="${APPMOD_PROBE_BIN:-}"
 NFS_UID="${APPMOD_NFS_UID:-10001}"
 
 while [ $# -gt 0 ]; do
@@ -35,6 +40,13 @@ done
 for v in STORE STAGE ROLE RUN_ID; do
   if [ -z "${!v}" ]; then echo "probe-launch: --${v,,} is required" >&2; exit 2; fi
 done
+PROBE_CMD=(python3 "$PROBE")
+if [ -n "$PROBE_BIN" ]; then
+  if [[ ! $PROBE_BIN =~ ^/[A-Za-z0-9._/-]+$ ]] || [ ! -f "$PROBE_BIN" ] || [ ! -x "$PROBE_BIN" ]; then
+    echo "probe-launch: APPMOD_PROBE_BIN must be an absolute path to an executable file" >&2; exit 2
+  fi
+  PROBE_CMD=("$PROBE_BIN")
+fi
 
 if [ "$STORE" = "smb" ]; then
   MNT=/mnt/appdata-smb
@@ -88,7 +100,7 @@ if [ -n "$PAIR_BEHAVIOR" ]; then
   mkdir -p "$SYNC/out" "$SYNC/in"
   if [ "$STORE" = "nfs" ]; then chown -R "$NFS_UID:$NFS_UID" "$SYNC"; fi
   PREFIX="s3://$BUCKET/probe/$RUN_ID/sync/$SYNC_ID"
-  "${RUN_AS[@]}" python3 "$PROBE" --store "$STORE" --root "$ROOT" --stage "$STAGE" --role "$ROLE" \
+  "${RUN_AS[@]}" "${PROBE_CMD[@]}" --store "$STORE" --root "$ROOT" --stage "$STAGE" --role "$ROLE" \
     --run-id "$RUN_ID" --pair-behavior "$PAIR_BEHAVIOR" --sync-id "$SYNC_ID" --sync-dir "$SYNC" \
     ${OFFSET_MS:+--ntp-offset-ms "$OFFSET_MS"} >"$SYNC/stdout.json" 2>"$SYNC/stderr.txt" &
   pid=$!
@@ -129,6 +141,6 @@ if [ "$STORE" = "nfs" ]; then
   # denies it (live 2026-10-07). Run as the UNIX user appsvc (uid 10001) that stage1-nfs.sh maps to
   # APPMOD\appsvc, so both protocols measure the same principal.
   exec setpriv --reuid="$NFS_UID" --regid="$NFS_UID" --clear-groups \
-    python3 "$PROBE" --store "$STORE" --root "$ROOT" --stage "$STAGE" --role "$ROLE" --run-id "$RUN_ID"
+    "${PROBE_CMD[@]}" --store "$STORE" --root "$ROOT" --stage "$STAGE" --role "$ROLE" --run-id "$RUN_ID"
 fi
-exec python3 "$PROBE" --store "$STORE" --root "$ROOT" --stage "$STAGE" --role "$ROLE" --run-id "$RUN_ID"
+exec "${PROBE_CMD[@]}" --store "$STORE" --root "$ROOT" --stage "$STAGE" --role "$ROLE" --run-id "$RUN_ID"

@@ -89,7 +89,7 @@ RULES: list[tuple[str, re.Pattern[str], str]] = [
     (
         "pii",
         re.compile(
-            r"[\w.+-]+@(?!example\.(?:com|org|net)\b)[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}\b",
+            r"[\w.+-]+@(?!example\.(?:com|org|net)\b)(?!\d+x\.(?:png|jpe?g|webp|gif)\b)[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}\b",
             re.IGNORECASE,
         ),
         "e-mail address; use (internal reviewer) or name@example.com",
@@ -186,6 +186,7 @@ SELFTEST_ACCEPT = [
     "Quoted title FSxN tips <!-- allow:naming -->",
     "See github.com/Yoshiki0705/FSx-for-ONTAP-App-Modernization-Patterns.",
     "npm install -g markdownlint-cli2@0.22.1",
+    "[PNG](../_assets/images/png/diagram@2x.png)",  # image scale suffix, not an address
 ]
 
 

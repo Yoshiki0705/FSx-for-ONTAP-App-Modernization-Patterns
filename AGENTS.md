@@ -28,7 +28,8 @@ Bilingual: Japanese is primary (`README.md`, `docs/ja/`), English mirrors it (`R
 
 ```bash
 make install   # .venv with the pins in requirements-dev.txt (ruff, cfn-lint)
-make all       # lint + audit + links + drift + test: the commit gate
+make all       # lint + audit + links + drift + app-modern + test: the commit gate
+make app-modern  # build and test app/modern (needs the .NET SDK 10; fails without it)
 ```
 
 Never read a gate's result off a pipe. `make all | tail` returns tail's status. Use

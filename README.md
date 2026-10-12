@@ -35,6 +35,7 @@ Windows のクライアントが残っている間は、ボリュームのセキ
 
 | 読みたいこと | 参照先 |
 |---|---|
+| 検証を自分の環境で再現する順序（前提、見積りと承認、段階 0 から 3、後片付け、再現できない範囲） | [再現手順](docs/ja/reproduce.md) |
 | 段階 0: SMB と NTFS の出発点 | [段階 0](docs/ja/stage-0-smb-ntfs.md) |
 | 段階 1: 同じボリュームへの NFS の追加 | [段階 1](docs/ja/stage-1-multiprotocol.md) |
 | 段階 2: Linux 上の新しい .NET への移行（AIMF のセッション記録を含む） | [段階 2](docs/ja/stage-2-aimf-modern-dotnet.md) |

@@ -84,6 +84,16 @@ ai-style: ## AI 調の兆候を検査（fail tier で落とす）
 	@$(PYTHON) tools/ai_style_rules.py $(AI_STYLE_PATHS) --summary
 	$(PYTHON) tools/ai_style_rules.py $(AI_STYLE_PATHS) --fail
 
+.PHONY: diagram-fonts
+diagram-fonts: ## 図のラベルが可読性の下限を満たすか
+	@$(PYTHON) tools/check_diagram_fonts.py --selftest >/dev/null
+	$(PYTHON) tools/check_diagram_fonts.py
+
+.PHONY: diagram-flow
+diagram-flow: ## 図が右と下へ読めるか、ラベルがアイコンの下にあるか
+	@$(PYTHON) tools/check_diagram_flow.py --selftest >/dev/null
+	$(PYTHON) tools/check_diagram_flow.py
+
 .PHONY: shell
 shell: ## shellcheck（未導入は失敗。対象 0 本ならその旨を出す）
 	$(call need,shellcheck,brew install shellcheck)
@@ -102,7 +112,7 @@ cfn: ## cfn-lint と cfn-guard（templates/ 配下を再帰で走査）
 	fi
 
 .PHONY: lint
-lint: markdown headings role-labels ai-style python shell cfn ## 文書と Python・シェル・CFn の静的検査
+lint: markdown headings role-labels ai-style diagram-fonts diagram-flow python shell cfn ## 文書と Python・シェル・CFn の静的検査
 
 .PHONY: audit
 audit: secrets ## 公開物の監査（命名・中立性・PII）と gitleaks
@@ -114,6 +124,12 @@ secrets: ## gitleaks で作業ツリーを走査（履歴全体は gitleaks work
 	$(call need,gitleaks,brew install gitleaks)
 	gitleaks dir . --config .gitleaks.toml --redact --exit-code 1 --no-banner
 
+.PHONY: app-modern
+app-modern: ## app/modern のビルドと単体テスト（dotnet SDK 10 必須。未導入・版違いは失敗）
+	$(call need,dotnet,https://dotnet.microsoft.com/download/dotnet/10.0)
+	@dotnet --version | grep -q '^10\.' || { echo "error: dotnet SDK 10 is required, found $$(dotnet --version)"; exit 1; }
+	dotnet build app/modern/DocIntake.sln -c Release --nologo
+	dotnet test app/modern/DocIntake.sln -c Release --no-build --nologo
 .PHONY: links
 links: ## 内部リンクの解決
 	$(PYTHON) tools/check_links.py
@@ -130,7 +146,12 @@ TEST_DIRS := scripts/tests
 PY_UNITTEST := tools.test_ai_style scripts.tests.test_estimate scripts.tests.test_readonly_scripts \
                scripts.tests.test_reuse_permutations scripts.tests.test_probe_merge \
                scripts.tests.test_no_stub_scripts scripts.tests.test_pr_verify \
-               scripts.tests.test_check_make_targets
+               scripts.tests.test_check_make_targets \
+               scripts.tests.test_measure_ssm_run scripts.tests.test_measure_ship_build \
+               scripts.tests.test_measure_standalone_probe scripts.tests.test_measure_pairs \
+               scripts.tests.test_measure_worker scripts.tests.test_measure_windows_scripts \
+               scripts.tests.test_measure_lambda_invoke \
+               scripts.tests.test_fetch_prices
 
 .PHONY: test
 test: ## 検出器の unittest、スクリプトの単体テスト、ガード・フック・シェルの自己テスト
@@ -163,7 +184,7 @@ drift: ## 文書が挙げる make ターゲットが Makefile に実在するか
 	$(PYTHON) tools/check_make_targets.py
 
 .PHONY: ci
-ci: lint audit links drift test ## CI が呼ぶ集約ターゲット
+ci: lint audit links drift app-modern test ## CI が呼ぶ集約ターゲット
 
 .PHONY: all
 all: ci ## コミット前のゲート（ci と同じ）
