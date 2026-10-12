@@ -49,7 +49,7 @@ PATH_RE='^/[A-Za-z0-9._/-]+$'
 for p in "$PROBE" "$NFS_ROOT" "$SMB_ROOT"; do
   case "/$p/" in */../*) die 2 "'..' is not allowed in a path: $p" ;; esac
 done
-[ -f "$PROBE" ] && [ -x "$PROBE" ] || die 2 "APPMOD_PROBE_BIN is not an executable file: $PROBE"
+if ! { [ -f "$PROBE" ] && [ -x "$PROBE" ]; }; then die 2 "APPMOD_PROBE_BIN is not an executable file: $PROBE"; fi
 command -v setpriv >/dev/null 2>&1 || die 2 "setpriv is required"
 mountpoint -q "$NFS_ROOT" || die 3 "not mounted: $NFS_ROOT"
 mountpoint -q "$SMB_ROOT" || die 3 "not mounted: $SMB_ROOT"

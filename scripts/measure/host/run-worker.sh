@@ -53,7 +53,7 @@ PATH_RE='^/[A-Za-z0-9._/-]+$'
 for p in "$WORKER" "$NFS_ROOT"; do
   case "/$p/" in */../*) die 2 "'..' is not allowed in a path: $p" ;; esac
 done
-[ -f "$WORKER" ] && [ -x "$WORKER" ] || die 2 "APPMOD_WORKER_BIN is not an executable file: $WORKER"
+if ! { [ -f "$WORKER" ] && [ -x "$WORKER" ]; }; then die 2 "APPMOD_WORKER_BIN is not an executable file: $WORKER"; fi
 REFS=()
 if [ -n "$REF_STAGES" ]; then
   IFS=',' read -r -a REFS <<<"$REF_STAGES"
