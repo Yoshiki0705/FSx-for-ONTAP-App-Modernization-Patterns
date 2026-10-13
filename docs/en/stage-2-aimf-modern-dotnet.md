@@ -313,7 +313,7 @@ The table below is estimates (unit price × quantity), not invoiced amounts. The
 
 | Item | Estimate | Note |
 |---|---|---|
-| Base (approval for 72 hours) | $57.71 (approved 2026-10-11T02:07:07Z) | Torn down after about 33.6 hours. The estimate prorated to 33.6 hours and the tag-attributed observed amount of $21.19 (excluding AD) are in [Verification environment](environment.md) |
+| Base (approval for 72 hours) | $57.71 (approved 2026-10-11T02:07:07Z) | Torn down after about 33.6 hours. The estimate prorated to 33.6 hours and the tag-attributed observed amount of $21.18 (excluding AD) are in [Verification environment](environment.md) |
 | atx analysis transformation | about $3.24 | The ceiling estimate is $4.20 |
 | atx `AWS/dotnet-modernization` | $0 within the no-cost quota, about $4.87 outside it | The ceiling estimate is $10.50. The remaining quota is not observable |
 

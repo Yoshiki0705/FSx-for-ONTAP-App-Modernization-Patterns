@@ -222,9 +222,9 @@ The base ran from 2026-10-11T02:08:54Z (stack creation) to about 11:44Z on 2026-
 | Amazon VPC (interface endpoints and others) | 1.848 | 0.924 | 2.77 |
 | Amazon S3 (artifacts bucket) | 0.018 | 0.003 | 0.02 |
 | AWS Lambda | 0 | 0 | 0 |
-| Subtotal | - | - | 21.19 |
+| Subtotal | - | - | 21.18 |
 
-- The subtotal is 21.19 USD while the rows sum to 21.18 USD. The one-cent difference is probably rounding, which was not checked. Daily subtotals are not shown
+- The subtotal is the sum of the unrounded values (21.1801 USD) rounded to 21.18 USD, which also equals the sum of the rounded rows. Daily subtotals are not shown
 - `EC2 - Other` was below 0.00001 on both days and is omitted from the table
 
 Two costs could not be attributed.
@@ -240,10 +240,10 @@ The estimate's hourly rates prorated to 33.6 hours agreed with the tag-attribute
 | EC2 (Windows + Linux) | 6.41 | 6.36 | −1% |
 | VPC interface endpoints | 2.82 | 2.77 | −2% |
 | AWS Managed Microsoft AD | 4.91 | Not attributable | n/a |
-| Total (attributable rows only) | 21.64 | 21.19 | −2% |
+| Total (attributable rows only) | 21.64 | 21.18 | −2% |
 
 The approved 72-hour estimate totals 57.71 USD, which prorates to about 26.9 USD for 33.6 hours. The range confirmed as observed
-amounts is 21.19 USD, which excludes AD.
+amounts is 21.18 USD, which excludes AD.
 The agreement confirms hourly rates, not an invoice. The AD share is not confirmed as an observed amount.
 The Cost Explorer value for AWS Transform cannot be attributed by tag and is not in this table ([stage 2](stage-2-aimf-modern-dotnet.md)).
 

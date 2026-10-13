@@ -767,7 +767,7 @@ All of the following are estimates or single observations; invoices were not obs
 | Item | Value | Basis |
 |---|---|---|
 | Base estimate | $57.71 for 72 hours (approved 2026-10-11) | Approval record. Torn down after about 33.6 hours |
-| Base observed amount (what tag could attribute) | $21.19 (FSx for ONTAP $12.03, EC2 $6.36, VPC $2.77, S3 $0.02; excluding AD) | Cost Explorer, read on 2026-10-13, `Estimated: true`, Credit and Refund excluded |
+| Base observed amount (what tag could attribute) | $21.18 (FSx for ONTAP $12.03, EC2 $6.36, VPC $2.77, S3 $0.02; excluding AD) | Cost Explorer, read on 2026-10-13, `Estimated: true`, Credit and Refund excluded |
 | Base creation time | About 33 minutes (2026-10-07, once) | [Verification environment](environment.md) |
 | atx analysis transformation | 92.46 agent minutes, an estimate of about $3.24 | 2026-10-11, $0.035 / agent minute |
 | atx dotnet transformation | 139.00 agent minutes. $0 if within the free tier, about $4.87 if outside it | 2026-10-11. The remaining free tier cannot be observed |
