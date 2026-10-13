@@ -94,6 +94,11 @@ diagram-flow: ## 図が右と下へ読めるか、ラベルがアイコンの下
 	@$(PYTHON) tools/check_diagram_flow.py --selftest >/dev/null
 	$(PYTHON) tools/check_diagram_flow.py
 
+.PHONY: table-sums
+table-sums: ## 表の小計・合計が行の和と一致するか（sum-check マーカー付きの表のみ）
+	@$(PYTHON) tools/check_table_sums.py --selftest >/dev/null
+	$(PYTHON) tools/check_table_sums.py
+
 .PHONY: shell
 shell: ## shellcheck（未導入は失敗。対象 0 本ならその旨を出す）
 	$(call need,shellcheck,brew install shellcheck)
@@ -112,7 +117,7 @@ cfn: ## cfn-lint と cfn-guard（templates/ 配下を再帰で走査）
 	fi
 
 .PHONY: lint
-lint: markdown headings role-labels ai-style diagram-fonts diagram-flow python shell cfn ## 文書と Python・シェル・CFn の静的検査
+lint: markdown headings role-labels ai-style table-sums diagram-fonts diagram-flow python shell cfn ## 文書と Python・シェル・CFn の静的検査
 
 .PHONY: audit
 audit: secrets ## 公開物の監査（命名・中立性・PII）と gitleaks
@@ -146,7 +151,7 @@ TEST_DIRS := scripts/tests
 PY_UNITTEST := tools.test_ai_style scripts.tests.test_estimate scripts.tests.test_readonly_scripts \
                scripts.tests.test_reuse_permutations scripts.tests.test_probe_merge \
                scripts.tests.test_no_stub_scripts scripts.tests.test_pr_verify \
-               scripts.tests.test_check_make_targets \
+               scripts.tests.test_check_make_targets scripts.tests.test_check_table_sums \
                scripts.tests.test_measure_ssm_run scripts.tests.test_measure_ship_build \
                scripts.tests.test_measure_standalone_probe scripts.tests.test_measure_pairs \
                scripts.tests.test_measure_worker scripts.tests.test_measure_windows_scripts \
