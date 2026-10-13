@@ -688,7 +688,7 @@ Lambda から FSx for ONTAP S3 Access Points 経由で同じボリュームを�
 | 項目 | 値 | 根拠 |
 |---|---|---|
 | 基盤の見積り | 72 時間で $57.71（2026-10-11 の承認） | 承認記録。破棄は約 33.6 時間後 |
-| 基盤の実額（タグで帰属できた分） | $21.19（FSx for ONTAP $12.03、EC2 $6.36、VPC $2.77、S3 $0.02。AD を除く） | Cost Explorer、2026-10-13 に読み取り、`Estimated: true`、Credit と Refund を除外 |
+| 基盤の実額（タグで帰属できた分） | $21.18（FSx for ONTAP $12.03、EC2 $6.36、VPC $2.77、S3 $0.02。AD を除く） | Cost Explorer、2026-10-13 に読み取り、`Estimated: true`、Credit と Refund を除外 |
 | 基盤の作成時間 | 約 33 分（2026-10-07、1 回） | [検証環境](environment.md) |
 | atx の分析変換 | 92.46 agent minutes、約 $3.24 の見積り | 2026-10-11、$0.035 / agent minute |
 | atx の dotnet 変換 | 139.00 agent minutes。無料枠内なら $0、枠外なら約 $4.87 | 2026-10-11。枠の残りは観測できない |
