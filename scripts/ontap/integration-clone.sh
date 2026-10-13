@@ -71,6 +71,8 @@ STEP=""
 # Also accept an explicit --name for the rejection tests (appdata, appdata_it_0, other).
 EXPLICIT_NAME=""
 
+# -h/--help comes first: the action is a positional, so without this --help is read as an action name.
+case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 if [ $# -lt 1 ]; then usage; exit 2; fi
 ACTION="$1"; shift
 case "$ACTION" in

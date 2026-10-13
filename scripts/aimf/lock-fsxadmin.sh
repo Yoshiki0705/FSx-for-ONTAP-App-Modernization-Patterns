@@ -34,6 +34,9 @@ LINUX_ROLE_ARN="${APPMOD_LINUX_ROLE_ARN:-}"
 
 usage() { echo "usage: APPMOD_LINUX_ROLE_ARN=<linux-instance-role-arn> lock-fsxadmin.sh on | lock-fsxadmin.sh off" >&2; }
 
+# -h/--help is answered before the argument count is read, so asking for usage never reaches the
+# role ARN check or any IAM call.
+case "${1:-}" in -h | --help) usage 2>&1; exit 0 ;; esac
 if [ $# -ne 1 ]; then usage; exit 2; fi
 ACTION="$1"
 case "$ACTION" in on|off) ;; *) echo "lock-fsxadmin: action must be on or off" >&2; usage; exit 2 ;; esac

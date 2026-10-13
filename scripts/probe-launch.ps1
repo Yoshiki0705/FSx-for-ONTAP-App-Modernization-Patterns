@@ -15,19 +15,42 @@
   With -PairBehavior/-SyncId/-Bucket it runs one coordinated two-client behavior and bridges the
   Probe's local signal directory to the artifacts bucket, so the barrier never touches the volume.
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Help', PositionalBinding = $false)]
 param(
-    [Parameter(Mandatory = $true)][int]$Stage,
-    [Parameter(Mandatory = $true)][string]$RunId,
-    [string]$Role = "holder",
-    [string]$SvmNetbios = "APPMODSVM01",
-    [string]$Region = "ap-northeast-1",
-    [string]$ProbeExe = "C:\appmod\DocIntake\DocIntake.Probe.exe",
+    [Parameter(ParameterSetName = 'Run', Mandatory = $true)][int]$Stage,
+    [Parameter(ParameterSetName = 'Run', Mandatory = $true)][string]$RunId,
+    [Parameter(ParameterSetName = 'Run')][string]$Role = "holder",
+    [Parameter(ParameterSetName = 'Run')][string]$SvmNetbios = "APPMODSVM01",
+    [Parameter(ParameterSetName = 'Run')][string]$Region = "ap-northeast-1",
+    [Parameter(ParameterSetName = 'Run')][string]$ProbeExe = "C:\appmod\DocIntake\DocIntake.Probe.exe",
     # Coordinated two-client mode: one behavior against the other host, synchronized via S3.
-    [string]$PairBehavior = "",
-    [string]$SyncId = "",
-    [string]$Bucket = ""
+    [Parameter(ParameterSetName = 'Run')][string]$PairBehavior = "",
+    [Parameter(ParameterSetName = 'Run')][string]$SyncId = "",
+    [Parameter(ParameterSetName = 'Run')][string]$Bucket = "",
+    [Parameter(ParameterSetName = 'Help')][switch]$Help,
+    # Collects anything the binder would otherwise bind by position, so an option spelled --help or
+    # --no-such-flag is answered here instead of being taken as the value of a parameter.
+    [Parameter(ValueFromRemainingArguments = $true)][string[]]$ExtraArgs
 )
+# Argument handling comes before anything is read, mapped or written: a script that binds --help to
+# a parameter runs for real when someone asks it for usage. The Run set holds the real parameters;
+# with none of them given the script answers with usage instead of prompting.
+$UsageLine = "usage: probe-launch.ps1 -Stage <n> -RunId <id> [-Role <role>] [-SvmNetbios <name>] [-Region <region>] [-ProbeExe <path>] [-PairBehavior <b> -SyncId <id> -Bucket <name>] | -Help"
+if ($Help -or ($ExtraArgs -contains "--help") -or ($ExtraArgs -contains "-h")) {
+    Write-Output $UsageLine
+    Write-Output "  Maps the share as the appsvc user and runs DocIntake.Probe. Invoked by run-probe.sh."
+    return
+}
+if ($ExtraArgs -and $ExtraArgs.Count -gt 0) {
+    [Console]::Error.WriteLine("probe-launch.ps1: unknown argument: $($ExtraArgs[0])")
+    [Console]::Error.WriteLine($UsageLine)
+    exit 2
+}
+if ($PSCmdlet.ParameterSetName -ne 'Run') {
+    [Console]::Error.WriteLine("probe-launch.ps1: missing required parameters")
+    [Console]::Error.WriteLine($UsageLine)
+    exit 2
+}
 
 $ErrorActionPreference = "Stop"
 Import-Module AWSPowerShell -ErrorAction Stop

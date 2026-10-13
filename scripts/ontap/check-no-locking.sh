@@ -34,12 +34,17 @@ FS_ID="${APPMOD_FS_ID:-}"
 REGION="${APPMOD_REGION:-ap-northeast-1}"
 TARGET_VOLUME="appdata"
 
+usage() {
+  echo "usage: check-no-locking.sh [--file-system-id fs-... | --mgmt-ip <ip>] [--region <region>]"
+  echo "  Read-only. Set APPMOD_ONTAP_FIXTURE=<file> to check a saved volume list instead of the cluster."
+}
 while [ $# -gt 0 ]; do
   case "$1" in
     --file-system-id) FS_ID="${2:-}"; shift 2 ;;
     --mgmt-ip) MGMT_IP="${2:-}"; shift 2 ;;
     --region) REGION="${2:-}"; shift 2 ;;
-    *) echo "check-no-locking: unknown argument: $1" >&2; exit 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "check-no-locking: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 

@@ -31,10 +31,12 @@
 # shellcheck disable=SC2016
 set -uo pipefail
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  echo "usage: run-worker.sh [-h|--help]   (input comes from APPMOD_* variables; no arguments)"
   awk 'NR > 1 { if (/^#/) { sub(/^# ?/, ""); print } else exit }' "$0"
   exit 0
 fi
 die() { local code="$1"; shift; echo "run-worker: $*" >&2; exit "$code"; }
+[ "$#" -eq 0 ] || die 2 "unknown argument: $1"
 STAGE="${APPMOD_WORKER_STAGE:-}"
 WORKER="${APPMOD_WORKER_BIN:-}"
 STORE="${APPMOD_WORKER_STORE:-nfs}"

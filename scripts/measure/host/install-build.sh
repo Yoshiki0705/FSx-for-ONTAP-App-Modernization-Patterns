@@ -22,11 +22,13 @@
 set -euo pipefail
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  echo "usage: install-build.sh [-h|--help]   (input comes from APPMOD_* variables; no arguments)"
   sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 
 die() { local code="$1"; shift; echo "install-build: $*" >&2; exit "$code"; }
+[ "$#" -eq 0 ] || die 2 "unknown argument: $1"
 
 RUN_ID="${APPMOD_RUN_ID:-}"
 EXPECT="${APPMOD_PAYLOAD_SHA256:-}"

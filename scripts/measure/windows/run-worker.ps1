@@ -33,16 +33,39 @@
 .EXAMPLE
   run-worker.ps1 -ExeDir C:\appmod\DocIntake-worker -Stage s0
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Help', PositionalBinding = $false)]
 param(
-    [ValidatePattern('^s[0-9][a-z]{0,2}$')][string]$Stage = "s0",
-    [Parameter(Mandatory = $true)][string]$ExeDir,
-    [string]$ExeName = "DocIntake.Worker.exe",
-    [string]$SvmNetbios = "APPMODSVM01",
-    [string]$Domain = "APPMOD",
-    [string]$SecretId = "appmod/app-users",
-    [string]$Region = "ap-northeast-1"
+    [Parameter(ParameterSetName = 'Run')][ValidatePattern('^s[0-9][a-z]{0,2}$')][string]$Stage = "s0",
+    [Parameter(ParameterSetName = 'Run', Mandatory = $true)][string]$ExeDir,
+    [Parameter(ParameterSetName = 'Run')][string]$ExeName = "DocIntake.Worker.exe",
+    [Parameter(ParameterSetName = 'Run')][string]$SvmNetbios = "APPMODSVM01",
+    [Parameter(ParameterSetName = 'Run')][string]$Domain = "APPMOD",
+    [Parameter(ParameterSetName = 'Run')][string]$SecretId = "appmod/app-users",
+    [Parameter(ParameterSetName = 'Run')][string]$Region = "ap-northeast-1",
+    [Parameter(ParameterSetName = 'Help')][switch]$Help,
+    # Collects anything the binder would otherwise bind by position, so an option spelled --help or
+    # --no-such-flag is answered here instead of being taken as the value of a parameter.
+    [Parameter(ValueFromRemainingArguments = $true)][string[]]$ExtraArgs
 )
+# Argument handling comes before anything is read, mapped or written: a script that binds --help to
+# a parameter runs for real when someone asks it for usage. The Run set holds the real parameters;
+# with none of them given the script answers with usage instead of prompting.
+$UsageLine = "usage: run-worker.ps1 -ExeDir <dir> [-Stage <sN>] [-ExeName <file>] [-SvmNetbios <name>] [-Domain <name>] [-SecretId <id>] [-Region <region>] | -Help"
+if ($Help -or ($ExtraArgs -contains "--help") -or ($ExtraArgs -contains "-h")) {
+    Write-Output $UsageLine
+    Write-Output "  Runs the published Worker once against the share as the appsvc user."
+    return
+}
+if ($ExtraArgs -and $ExtraArgs.Count -gt 0) {
+    [Console]::Error.WriteLine("run-worker.ps1: unknown argument: $($ExtraArgs[0])")
+    [Console]::Error.WriteLine($UsageLine)
+    exit 2
+}
+if ($PSCmdlet.ParameterSetName -ne 'Run') {
+    [Console]::Error.WriteLine("run-worker.ps1: missing required parameters")
+    [Console]::Error.WriteLine($UsageLine)
+    exit 2
+}
 $ErrorActionPreference = "Stop"
 if ($ExeName -notmatch '^[A-Za-z0-9._-]+\.exe$') { throw "ExeName is not a plain .exe file name: $ExeName" }
 $remote = "\\$SvmNetbios\appdata"
