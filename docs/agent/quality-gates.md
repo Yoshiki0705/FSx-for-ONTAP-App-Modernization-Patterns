@@ -11,6 +11,7 @@ the same tree with the same tool versions. `make all` runs everything and is the
 | `ai-style` | `tools/ai_style_rules.py` | Writing-style signals; fail tier only |
 | `diagram-fonts` | `tools/check_diagram_fonts.py` | Label size in `docs/_assets/diagrams/*.drawio` and the exported SVGs meets the readability floor |
 | `diagram-flow` | `tools/check_diagram_flow.py` | Diagrams read rightwards and downwards, and labels sit under their icons |
+| `table-sums` | `tools/check_table_sums.py` | A table marked with `sum-check` has a stated total equal to the sum of its rows (Decimal; strict at the total's own precision). Unmarked tables are not read |
 | `python` | ruff (pinned in `requirements-dev.txt`) | Lint and format of `tools/` and `scripts/`; fails when the ruff on `PATH` is not the pinned version |
 | `shell` | shellcheck | Every tracked `*.sh` |
 | `cfn` | cfn-lint and cfn-guard | Every template under `templates/`, found recursively, against rules in `guard/` |
@@ -28,6 +29,26 @@ completed with success. A workflow with no run for the SHA counts as a failure, 
 latest-results view of `gh pr checks` can return the previous commit's verdict. Exit 1 is a
 failure or a missing run, exit 2 is "still running", and `WAIT=<seconds>` polls every 30 seconds.
 A workflow with a `paths:` filter is required only when a changed file matches it.
+
+A table opts in to `table-sums` with a marker on the line directly above its header row. `cols=` lists
+the 1-based numeric columns to verify. `tol=` (optional) accepts a total stated after rounding, within
+that absolute difference; without it the sum must equal the total at the total's own decimal places.
+`total=` (optional, last parameter) names the total row: `last` (default) or `row:<first-cell-text>`.
+Rows whose first cell is wrapped in parentheses are left out of the sum, and cells with no digit
+(`-`, `n/a`) are skipped and listed in the failure message. A marker with no table after it, an
+unparsable table, or a non-numeric stated total fails. Mark only a table whose total equals the sum
+of the rows above it; a comparison of estimate and observed columns, or a total that covers only some
+rows, stays unmarked. The scan covers `docs/**/*.md`, `README.md`, `README.en.md`, and
+`app/modern/README.md`, and ignores fenced code, so this example is not read as a marker:
+
+```markdown
+<!-- sum-check: cols=2,3 -->
+| Item | Jan (USD) | Feb (USD) |
+|---|---|---|
+| Compute | 12.03 | 11.50 |
+| Storage | 6.36 | 6.40 |
+| Subtotal | 18.39 | 17.90 |
+```
 
 `app/legacy` (.NET Framework 4.8) is not built by any gate, because it does not build on the Linux CI runner.
 Each detector runs its selftest before scanning, so a rule that stopped matching fails the gate
@@ -47,6 +68,7 @@ of the Hub's guard.
 | A failing gate hidden by a pipe | Read the exit status directly: `make all > /tmp/all.log 2>&1; echo $?` |
 | A one-level glob skips templates one directory deeper | `cfn` finds templates recursively |
 | cfn-lint warnings read as a pass | Any non-zero exit fails the gate |
+| A hand-added total can be wrong by a cent | Mark the table with `<!-- sum-check: cols=N -->` so the gate re-adds it |
 
 Running `--help` on a script that does not parse arguments runs it. A script with no argument
 handling treats `--help` as a normal invocation, so reading its usage can create resources. Every
