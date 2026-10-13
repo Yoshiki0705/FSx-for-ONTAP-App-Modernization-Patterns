@@ -1,0 +1,24 @@
+{
+  "scripts": {
+    "scripts/lib/entry-check.sh": {
+      "kind": "lib",
+      "reason": "Sourced by deploy.sh and aimf/run-atx.sh; defines the appmod_entry_check function only."
+    },
+    "scripts/ontap/lib-ontap-rest.sh": {
+      "kind": "lib",
+      "reason": "Sourced by ontap/stage1-nfs.sh and ontap/integration-clone.sh; sets three variables and defines functions."
+    },
+    "scripts/measure/common.py": {
+      "kind": "lib",
+      "reason": "Imported by scripts/measure/*.py; has no __main__ block."
+    },
+    "scripts/aimf/block_direct_atx.py": {
+      "kind": "hook",
+      "reason": "PreToolUse hook reading one JSON event on stdin; exit 2 means block, so an unknown option must not be turned into a block. Its command line carries no arguments, so only side effects are checked."
+    },
+    "scripts/guard_irreversible_ops.py": {
+      "kind": "hook",
+      "reason": "PreToolUse hook reading one JSON event on stdin. Byte-identical copy of the upstream guard and not editable here, so it is checked for side effects only."
+    }
+  }
+}
