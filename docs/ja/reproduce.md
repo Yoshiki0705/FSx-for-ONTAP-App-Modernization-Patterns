@@ -28,7 +28,8 @@ Linux 上の .NET、さらに AWS Lambda へ移す検証（2026-10-07 から 202
 | AWS Transform custom（atx）の 2 変換 | 手順は再現できる | `scripts/aimf/run-atx.sh` | 出力と agent minutes は実行ごとに違う |
 | 段階 3（Lambda と S3 Access Points） | できる | `app/modern/src/DocIntake.Lambda`、`scripts/deploy.sh stage3`、`scripts/measure/lambda_invoke.py` | `lambda_invoke.py` はこの形では未実行 |
 | 見積りの価格ファイル | できる | `scripts/fetch-prices.py` | フィルタの値は実環境で再確認していない |
-| 請求額 | できない | なし | 請求額は観測していない。見積りだけ |
+| 実額の帰属（Cost Explorer） | できる | 「実額の帰属方法」の節 | 値は `Estimated: true` で請求書ではない。共用アカウントでは、タグとリソース ID で帰属できない費用（AD など）が残る |
+| 請求額（請求書） | できない | なし | 請求書は観測していない |
 
 ## 前提とするアカウント・ツール・版
 
@@ -682,18 +683,63 @@ Lambda から FSx for ONTAP S3 Access Points 経由で同じボリュームを�
 
 ## 時間と費用の見込み
 
-次はすべて見積りか 1 回の観測で、請求額は観測していない。Cost Explorer での確認は 2026-10-13 に行う予定だった。
+次はすべて見積りか 1 回の観測で、請求書は観測していない。実額は 2026-10-13 に Cost Explorer を読んだ値（`Estimated: true`）で、タグとリソース ID で帰属できた範囲だけである（[検証環境](environment.md)）。
 
 | 項目 | 値 | 根拠 |
 |---|---|---|
-| 基盤の見積り | 72 時間で $57.71（2026-10-11 の承認） | 承認記録。破棄は約 33 時間後 |
+| 基盤の見積り | 72 時間で $57.71（2026-10-11 の承認） | 承認記録。破棄は約 33.6 時間後 |
+| 基盤の実額（タグで帰属できた分） | $21.19（FSx for ONTAP $12.03、EC2 $6.36、VPC $2.77、S3 $0.02。AD を除く） | Cost Explorer、2026-10-13 に読み取り、`Estimated: true`、Credit と Refund を除外 |
 | 基盤の作成時間 | 約 33 分（2026-10-07、1 回） | [検証環境](environment.md) |
 | atx の分析変換 | 92.46 agent minutes、約 $3.24 の見積り | 2026-10-11、$0.035 / agent minute |
 | atx の dotnet 変換 | 139.00 agent minutes。無料枠内なら $0、枠外なら約 $4.87 | 2026-10-11。枠の残りは観測できない |
+| AWS Transform の実額 | $3.62215（2026-10-11、サービス単位） | 103.49 分相当で、atx の記録（92.46 分と 139.00 分）と合わない。理由は未確認（[段階 2](stage-2-aimf-modern-dotnet.md)） |
 | 段階 3 の各回の承認額 | $0.04、$0.01、$0.01 | 2026-10-11 と 2026-10-12 の承認記録 |
 | Kiro のクレジット | 約 284（上限 5,000） | 2026-10-12 の 1 セッション |
 
 クレジットは金額に換算していない。AIMF セッションの実時間は、人の承認と質疑の時間を含むため並べていない。
+
+## 実額の帰属方法
+
+> 証拠区分: 手順は `documented`（下の 2 つの出典）。値を得た読み取りは 2026-10-13、各 1 回で、そのコマンドは記録していない。
+> 下のコマンドは API リファレンスに沿って組んだ雛形で、そのまま実行した記録ではない。
+
+共用のアカウントでは、Cost Explorer のサービス単位の合計は、この検証の費用ではない。他の用途の分が混ざる。
+本検証は、次の 2 つの帰属だけを実額として載せた。どちらにも載らない費用は、見積りと書き分ける。
+
+1. タグで絞る。CloudFormation が付ける `aws:cloudformation:stack-name` は、AWS が付けるタグなので、Billing and Cost Management で
+   コスト配分タグとして有効化しないと Cost Explorer に出ない（[Using AWS-generated tags](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/aws-tags.html)）。
+   値にはスタック名（`appmod-base`、`appmod-stage3`）を指定する。
+2. リソース ID で引く。`GetCostAndUsageWithResources` は、リソース ID でのグループ化か絞り込みが要る。
+   Cost Explorer の設定でリソース単位のデータを有効にしておく必要があり、期間は直近 14 日以内、リソース単位の粒度は日次（EC2 だけ時間単位）である
+   （[GetCostAndUsageWithResources](https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_GetCostAndUsageWithResources.html)）。
+   14 日を過ぎると引けないので、破棄の後は早めに読む。
+
+どちらの読み取りでも、指標は `UnblendedCost`、`RECORD_TYPE` の Credit と Refund は除外する。結果の `Estimated` が `true` の間は請求確定前の値である。
+
+```bash
+# 1. タグで絞る（サービス別、日次）
+cat > /tmp/ce-filter.json <<'JSON'
+{"And": [
+  {"Tags": {"Key": "aws:cloudformation:stack-name", "Values": ["appmod-base", "appmod-stage3"]}},
+  {"Not": {"Dimensions": {"Key": "RECORD_TYPE", "Values": ["Credit", "Refund"]}}}
+]}
+JSON
+aws ce get-cost-and-usage --time-period Start=2026-10-11,End=2026-10-13 --granularity DAILY \
+  --metrics UnblendedCost --filter file:///tmp/ce-filter.json \
+  --group-by Type=DIMENSION,Key=SERVICE
+
+# 2. リソース ID で引く（SERVICE の値は aws ce get-dimension-values --dimension SERVICE で調べる）
+aws ce get-cost-and-usage-with-resources --time-period Start=2026-10-11,End=2026-10-13 --granularity DAILY \
+  --metrics UnblendedCost \
+  --filter '{"And": [{"Dimensions": {"Key": "SERVICE", "Values": ["<SERVICE の値>"]}}, {"Not": {"Dimensions": {"Key": "RECORD_TYPE", "Values": ["Credit", "Refund"]}}}]}' \
+  --group-by Type=DIMENSION,Key=RESOURCE_ID
+```
+
+- 期間の `End` は含まれない。2026-10-11 と 2026-10-12 の 2 日を読むには `End=2026-10-13` と書く。日付は UTC
+- 稼働時間は、スタックイベントの作成開始と削除完了の時刻から数える。本検証は約 33.6 時間だった
+- 見積りとの比較は、見積りの時間単価に稼働時間を掛けた値と、タグで帰属できた実額を行ごとに並べる。AD のようにリソース ID もタグも付かない費用は、見積りだけを示して「帰属不可」と書く
+- AWS Transform のようにタグで帰属できないサービスは、サービス単位の値を別に示す。共用アカウントの合計なので、この検証だけの費用とは書かない
+- 結果の `Estimated` を載せる。請求書の値とは書かない
 
 ## 後片付けの手順
 
@@ -719,7 +765,7 @@ bash scripts/teardown.sh --apply --file-system-id fs-0123456789abcdef0 --linux-i
 - ONTAP の版は動く。最初の構築（2026-10-07）は 9.19.1P2、再構築（2026-10-11）は 9.19.1P3 だった。新しく作るファイルシステムは、別の版になりうる。
 - atx と kiro-cli の出力は決定的でない。atx の agent minutes、AIMF の ADR とコード、台帳の項目は、再実行で変わる。`app/modern` は 2026-10-12 のセッションの出力であり、再実行の出力と一致しない。
 - 計測値のほとんどは各 1 回の観測で、write-visibility の遅れ（約 8 秒と 100 ms 未満）のような値は同じにならない。形が再現するかどうかを見る。
-- 請求額と、無料枠の残りは観測できない。
+- 請求書と、無料枠の残りは観測できない。
 - 初回の Linux 向け自己完結ビルドの前回分（`ship_build.py --base` が参照するホスト上のディレクトリ）は、公開物にない。初回の配置は S3 経由の再構成の手順になる。
 - 料金ページの動的タブや Price List の SKU は変わる。`fetch-prices.py` は取得日を記録するが、過去の値を再現するものではない。
 

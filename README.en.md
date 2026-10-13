@@ -7,7 +7,7 @@ The data never leaves the FSx for ONTAP volume; the application side and the pro
 
 > **Status**: stages 0 to 3 have been measured. The runs used ONTAP 9.19.1P2 (initial build, 2026-10-07) and 9.19.1P3 (rebuild, 2026-10-11 to 12) on a Single-AZ file system with one volume and the ntfs security style.
 > Most values are single observations; each document states the run id, date, environment, and evidence tier.
-> Not measured: the unix and mixed security styles, other ONTAP versions, Multi-AZ, the container branch, and invoice amounts (costs are estimates only; invoices have not been observed).
+> Not measured: the unix and mixed security styles, other ONTAP versions, Multi-AZ, the container branch, and invoices (costs are estimates plus Cost Explorer pre-close values that tag and resource ID could attribute; invoices have not been observed).
 > These are treated as `hypothesis`.
 
 ## Scope

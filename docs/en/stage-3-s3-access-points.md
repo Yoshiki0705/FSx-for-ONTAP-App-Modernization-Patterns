@@ -230,7 +230,13 @@ specified). `deploy.sh stage3` passes them through unchanged, and rejects an est
 
 The estimates approved for the three stage-3 runs totaled $0.04 (2026-10-11), $0.01 (2026-10-12 02:19Z)
 and $0.01 (2026-10-12 10:35Z), in that order. These are upper-bound calculations (unit price × quantity),
-not invoiced amounts. Invoices have not been observed; the Cost Explorer check is due on 2026-10-13.
+not invoiced amounts.
+
+The observed amounts were read from Cost Explorer on 2026-10-13 (`Estimated: true`, Credit and Refund excluded, no invoice checked).
+In the values filtered by the tags `appmod-base` and `appmod-stage3`, AWS Lambda was 0 USD on both 2026-10-11 and 2026-10-12.
+Amazon S3 was 0.02 USD for the artifacts bucket. No observed amount isolates the three runs.
+Which service row carried the S3 Access Points request charges was not checked.
+The observed amounts for the whole base are in [Verification environment](environment.md).
 
 ## What to confirm at the boundary
 
