@@ -45,7 +45,13 @@ class ConfigError(ValueError):
 
 
 def parse_config(argv: list[str]) -> dict:
-    parser = argparse.ArgumentParser(add_help=False)
+    # parse_args, not parse_known_args: an option this parser does not declare (including a
+    # misspelled one) exits 2 before anything is measured, and -h/--help prints usage and exits 0.
+    parser = argparse.ArgumentParser(
+        prog="probe_peer.py",
+        description="Linux-side peer of DocIntake.Probe. Measures the five behaviors on a mount.",
+        allow_abbrev=False,
+    )
     parser.add_argument("--store")
     parser.add_argument("--root")
     parser.add_argument("--stage")
@@ -55,7 +61,12 @@ def parse_config(argv: list[str]) -> dict:
     parser.add_argument("--sync-id", dest="sync_id")
     parser.add_argument("--sync-dir", dest="sync_dir")
     parser.add_argument("--ntp-offset-ms", dest="ntp_offset_ms")
-    args, _ = parser.parse_known_args(argv)
+    parser.add_argument(
+        "--selftest",
+        action="store_true",
+        help="prove config validation and behavior isolation; measures nothing on a mount",
+    )
+    args = parser.parse_args(argv)
     config = {
         "store": args.store,
         "root": args.root,
@@ -660,6 +671,9 @@ def selftest() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if "-h" in argv or "--help" in argv:
+        # Prints usage and exits 0 before --selftest or any measuring.
+        parse_config(["--help"])
     if "--selftest" in argv:
         return selftest()
     try:

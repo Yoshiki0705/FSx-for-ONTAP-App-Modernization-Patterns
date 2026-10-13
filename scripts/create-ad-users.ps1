@@ -31,7 +31,7 @@
   Reads only the ad-admin and app-users secrets; creates nothing chargeable. The server is picked
   from the directory DNS IPs so the LDAP bind does not round-robin to an unreachable node.
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Region = "ap-northeast-1",
     [string]$DomainDn = "OU=Users,OU=APPMOD,DC=appmod,DC=example,DC=com",
@@ -41,8 +41,26 @@ param(
     # DC addresses are resolved at runtime from the domain name by default (the directory DNS IPs
     # are not hardcoded here, so no internal IP lives in a tracked file). Pass -DcIps to override.
     [string]$DomainName = "appmod.example.com",
-    [string[]]$DcIps = @()
+    [string[]]$DcIps = @(),
+    [switch]$Help,
+    # Collects anything the binder would otherwise bind by position, so an option spelled --help or
+    # --no-such-flag is answered here instead of being taken as the value of -Region.
+    [Parameter(ValueFromRemainingArguments = $true)][string[]]$ExtraArgs
 )
+
+# Argument handling comes before any secret read or directory write: a script that binds --help to
+# a parameter runs for real when someone asks it for usage.
+$UsageLine = "usage: create-ad-users.ps1 [-Region <region>] [-DomainDn <dn>] [-AdAdminSecret <id>] [-AppUsersSecret <id>] [-AdminUser <name>] [-DomainName <name>] [-DcIps <ip,...>] [-Help]"
+if ($Help -or ($ExtraArgs -contains "--help") -or ($ExtraArgs -contains "-h")) {
+    Write-Output $UsageLine
+    Write-Output "  Creates the appsvc and appreader AD users over LDAP. Run it with no arguments through ssm_run.py."
+    return
+}
+if ($ExtraArgs -and $ExtraArgs.Count -gt 0) {
+    [Console]::Error.WriteLine("create-ad-users: unknown argument: $($ExtraArgs[0])")
+    [Console]::Error.WriteLine($UsageLine)
+    exit 2
+}
 
 # Build UPNs from parts so no literal name@domain string sits in a tracked file.
 $AdminUpn = "$AdminUser@$DomainName"
