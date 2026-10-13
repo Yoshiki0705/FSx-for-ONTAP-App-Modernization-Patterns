@@ -215,6 +215,7 @@ applies (`appmod-base`, `appmod-stage3`), and values per resource ID (`GetCostAn
 
 The base ran from 2026-10-11T02:08:54Z (stack creation) to about 11:44Z on 2026-10-12 (`appmod-base` deletion complete), about 33.6 hours.
 
+<!-- sum-check: cols=4 -->
 | Service | 2026-10-11 (USD) | 2026-10-12 (USD) | Total (USD) |
 |---|---|---|---|
 | FSx for ONTAP (per resource ID of the file system; matches the tag-filtered value) | 7.837 | 4.191 | 12.03 |

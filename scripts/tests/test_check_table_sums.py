@@ -335,5 +335,35 @@ class CommandLineTests(unittest.TestCase):
             self.assertIn("README.md: error: file not found", err)
 
 
+class RealTreeTests(unittest.TestCase):
+    """The markers in the published docs bite, in both languages."""
+
+    MARKER = "<!-- sum-check: cols=4 -->"
+    PAGES = ("docs/ja/environment.md", "docs/en/environment.md")
+
+    def read(self, rel: str) -> str:
+        return (ROOT / rel).read_text(encoding="utf-8")
+
+    def test_both_languages_carry_the_identical_marker_once(self) -> None:
+        for rel in self.PAGES:
+            lines = [ln for ln in self.read(rel).splitlines() if "sum-check" in ln]
+            self.assertEqual(lines, [self.MARKER], rel)
+
+    def test_real_tree_passes(self) -> None:
+        for rel in self.PAGES:
+            report = checker.scan_text(self.read(rel), rel)
+            self.assertEqual(report.problems, 0, message(report))
+            self.assertEqual((report.tables, report.columns), (1, 1), rel)
+
+    def test_a_wrong_total_in_either_language_fails(self) -> None:
+        for rel in self.PAGES:
+            text = self.read(rel)
+            mutated = text.replace("| - | - | 21.18 |", "| - | - | 21.19 |", 1)
+            self.assertNotEqual(mutated, text, rel)
+            report = checker.scan_text(mutated, rel)
+            self.assertEqual(report.problems, 1, rel)
+            self.assertIn("stated total 21.19", message(report), rel)
+
+
 if __name__ == "__main__":
     unittest.main()
