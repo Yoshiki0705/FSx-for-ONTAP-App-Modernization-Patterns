@@ -123,8 +123,8 @@ code and do not pass it through a pipe.
 `.private/` is a gitignored working area that holds estimates, approval records, run records, and the
 AIMF workspace. It contains account IDs and instance IDs, so do not send it to a public repository.
 
-Two scripts do not interpret `--help`. `scripts/create-secrets.sh` and `scripts/aimf/setup-workspace.sh`
-start processing regardless of arguments. Add `APPMOD_DRY_RUN=1` first to check what would run.
+`scripts/create-secrets.sh` and `scripts/aimf/setup-workspace.sh` print usage on `-h` or `--help` and exit 2
+on any other argument, before any path or AWS call. On a first run, add `APPMOD_DRY_RUN=1` to check what would run.
 
 ## Estimate, approval, and creating the base
 
@@ -822,7 +822,7 @@ bash scripts/teardown.sh --apply --file-system-id fs-0123456789abcdef0 --linux-i
 
 - Placing the launcher, Probe, ONTAP scripts, and `seed/` on hosts, collecting the boundary records and inventories written on the host back to the working terminal, and splitting the standalone output are not scripted.
 - Placing the first self-contained build and deleting the file containing `\` directly under the volume root are not scripted.
-- `scripts/create-secrets.sh` and `scripts/aimf/setup-workspace.sh` do not interpret `--help`, and start processing even if it is given. Use `APPMOD_DRY_RUN=1` first.
+- `scripts/create-secrets.sh` and `scripts/aimf/setup-workspace.sh` take no arguments other than `-h/--help`. Use `APPMOD_DRY_RUN=1` on a first run.
 - `--price-fixture` of `estimate.py` is described as "tests only" in its help, but because there is no live price fetch it is needed in real use too.
 - The filter values of `fetch-prices.py` (EC2 License Included, CloudWatch Logs ingestion, and so on) were not re-checked against the Price List of a live environment.
   If a key is not uniquely determined it stops with exit code 3 and prints the candidates.

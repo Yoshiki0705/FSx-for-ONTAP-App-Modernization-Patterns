@@ -22,8 +22,13 @@ PROBE="/opt/appmod/probe_peer.py"
 PROBE_BIN="${APPMOD_PROBE_BIN:-}"
 NFS_UID="${APPMOD_NFS_UID:-10001}"
 
+usage() {
+  echo "usage: probe-launch.sh --store smb|nfs --stage <0..3> --role <role> --run-id <id> [--region r]"
+  echo "                       [--svm-netbios name] [--pair-behavior b --sync-id id --bucket name]"
+}
 while [ $# -gt 0 ]; do
   case "$1" in
+    -h|--help) usage; exit 0 ;;
     --store) STORE="${2:-}"; shift 2 ;;
     --stage) STAGE="${2:-}"; shift 2 ;;
     --role) ROLE="${2:-}"; shift 2 ;;
@@ -33,7 +38,7 @@ while [ $# -gt 0 ]; do
     --pair-behavior) PAIR_BEHAVIOR="${2:-}"; shift 2 ;;
     --sync-id) SYNC_ID="${2:-}"; shift 2 ;;
     --bucket) BUCKET="${2:-}"; shift 2 ;;
-    *) echo "probe-launch: unknown argument: $1" >&2; exit 2 ;;
+    *) echo "probe-launch: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 

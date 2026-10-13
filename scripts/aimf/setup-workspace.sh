@@ -16,7 +16,36 @@
 # When APPMOD_DRY_RUN is set, the clone, install.sh and atx-adjacent calls are printed instead of
 # run; the send-scan self-test (step 6) still runs because it only needs gitleaks and a temp dir.
 #
+# Usage: setup-workspace.sh [-h|--help]. The script takes no arguments; -h and --help print the
+# usage and exit 0 without doing anything, and any other argument exits 2 before step 1.
+#
 set -euo pipefail
+
+usage() {
+  echo "usage: setup-workspace.sh [-h|--help]"
+  echo "  Takes no arguments. Sets up the AIMF workspace under .private/aimf/ and wires the hooks."
+  echo "  Set APPMOD_DRY_RUN=1 to print the clone and install calls instead of running them."
+}
+
+# Argument handling comes before any path or side effect: a script that ignores its arguments
+# runs for real when someone asks it for --help.
+case "${1:-}" in
+  "") ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "setup-workspace: unknown argument: $1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+if [ "$#" -gt 0 ]; then
+  echo "setup-workspace: unexpected argument: $1" >&2
+  usage >&2
+  exit 2
+fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DRY_RUN="${APPMOD_DRY_RUN:-}"
@@ -267,4 +296,4 @@ main() {
   echo "setup-workspace: done"
 }
 
-main "$@"
+main

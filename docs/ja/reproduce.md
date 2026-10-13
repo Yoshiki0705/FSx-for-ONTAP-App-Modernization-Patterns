@@ -117,8 +117,8 @@ make all > /tmp/all.log 2>&1; echo $?
 `.private/` は gitignore されている作業領域で、見積り、承認記録、実行記録、AIMF のワークスペースを置く。
 ここにはアカウント ID やインスタンス ID が入るので、公開リポジトリへ送らない。
 
-2 本のスクリプトは `--help` を解釈しない。`scripts/create-secrets.sh` と `scripts/aimf/setup-workspace.sh` は、
-引数に関係なく処理を始める。最初は `APPMOD_DRY_RUN=1` を付けて、実行される内容を確かめる。
+`scripts/create-secrets.sh` と `scripts/aimf/setup-workspace.sh` は、`-h` または `--help` で使い方を表示し、
+それ以外の引数には、パスや AWS の呼び出しより前に終了コード 2 で終わる。初回は `APPMOD_DRY_RUN=1` を付けて、実行される内容を確かめる。
 
 ## 見積りと承認と基盤の作成
 
@@ -740,7 +740,7 @@ bash scripts/teardown.sh --apply --file-system-id fs-0123456789abcdef0 --linux-i
 
 - ホストへのランチャー、Probe、ONTAP のスクリプト、`seed/` の配置と、ホストで書いた境界記録や目録の作業端末への回収、standalone の出力の分割は、スクリプトにしていない。
 - 初回の自己完結ビルドの配置と、ボリューム直下の `\` 入りファイルの削除は、スクリプトにしていない。
-- `scripts/create-secrets.sh` と `scripts/aimf/setup-workspace.sh` は `--help` を解釈せず、付けても処理を始める。`APPMOD_DRY_RUN=1` を先に使う。
+- `scripts/create-secrets.sh` と `scripts/aimf/setup-workspace.sh` は `-h/--help` 以外の引数を取らない。初回は `APPMOD_DRY_RUN=1` を先に使う。
 - `estimate.py` の `--price-fixture` は、ヘルプが「tests only」と書くが、ライブの価格取得がないため実運用でも必要になる。
 - `fetch-prices.py` のフィルタの値（EC2 の License Included、CloudWatch Logs の取り込みなど）は、実環境の Price List で再確認していない。
   一意に決まらなければ終了コード 3 で止まり、候補を表示する。

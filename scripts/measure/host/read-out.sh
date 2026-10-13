@@ -19,10 +19,12 @@
 # shellcheck disable=SC2016
 set -uo pipefail
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  echo "usage: read-out.sh [-h|--help]   (input comes from APPMOD_* variables; no arguments)"
   awk 'NR > 1 { if (/^#/) { sub(/^# ?/, ""); print } else exit }' "$0"
   exit 0
 fi
 die() { local code="$1"; shift; echo "read-out: $*" >&2; exit "$code"; }
+[ "$#" -eq 0 ] || die 2 "unknown argument: $1"
 STAGES_ARG="${APPMOD_STAGES:-}"
 NFS_ROOT="${APPMOD_NFS_ROOT:-/mnt/appdata}"
 NFS_UID="${APPMOD_NFS_UID:-10001}"

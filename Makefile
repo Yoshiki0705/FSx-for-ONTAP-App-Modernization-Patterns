@@ -151,7 +151,7 @@ PY_UNITTEST := tools.test_ai_style scripts.tests.test_estimate scripts.tests.tes
                scripts.tests.test_measure_standalone_probe scripts.tests.test_measure_pairs \
                scripts.tests.test_measure_worker scripts.tests.test_measure_windows_scripts \
                scripts.tests.test_measure_lambda_invoke \
-               scripts.tests.test_fetch_prices
+               scripts.tests.test_fetch_prices scripts.tests.test_help_is_safe
 
 .PHONY: test
 test: ## 検出器の unittest、スクリプトの単体テスト、ガード・フック・シェルの自己テスト
@@ -175,6 +175,9 @@ test: ## 検出器の unittest、スクリプトの単体テスト、ガード�
 	# Stub detector: each external script's real-mode path makes at least one real aws / curl / ...
 	# call, and no real-mode runner call (run / step) is handed echo, printf or an echo-only function
 	$(PYTHON) scripts/tests/check_no_stub_scripts.py
+	# --help safety: every script under scripts/ answers --help / -h with usage and an unknown option
+	# with exit 2, calls no external tool (stubs first on PATH) and leaves no file outside a temp dir
+	$(PYTHON) scripts/tests/check_help_is_safe.py
 	# Every test file on disk must be reached by this target
 	$(PYTHON) scripts/tests/check_test_coverage.py
 

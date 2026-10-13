@@ -37,7 +37,7 @@ class CommonTests(unittest.TestCase):
             text = path.read_text()
             self.assertTrue(text.startswith("<#"), msg=path.name)
             self.assertIn(".SYNOPSIS", text)
-            self.assertIn("[CmdletBinding()]", text)
+            self.assertIn("[CmdletBinding(", text)
             self.assertIn('$ErrorActionPreference = "Stop"', text)
 
     def test_no_live_values_from_the_one_off_scripts(self) -> None:

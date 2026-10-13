@@ -38,6 +38,8 @@ usage() {
   echo "usage: deploy.sh <base|stage3> --estimate <file> --approved-at <ISO 8601>" >&2
 }
 
+# -h/--help comes first: the target is a positional, so without this --help is read as a target name.
+case "${1:-}" in -h|--help) usage 2>&1; exit 0 ;; esac
 if [ $# -lt 1 ]; then usage; exit 2; fi
 TARGET="$1"; shift
 case "$TARGET" in

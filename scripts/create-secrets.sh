@@ -16,6 +16,32 @@
 #
 set -euo pipefail
 
+usage() {
+  echo "usage: create-secrets.sh [-h|--help]"
+  echo "  Takes no arguments. Creates the four appmod/* secrets in ap-northeast-1."
+  echo "  Set APPMOD_DRY_RUN=1 to print the AWS calls instead of running them."
+}
+
+# Argument handling comes before REGION and before any AWS call: a script that ignores its
+# arguments runs for real when someone asks it for --help.
+case "${1:-}" in
+  "") ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "create-secrets: unknown argument: $1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+if [ "$#" -gt 0 ]; then
+  echo "create-secrets: unexpected argument: $1" >&2
+  usage >&2
+  exit 2
+fi
+
 REGION="ap-northeast-1"
 DRY_RUN="${APPMOD_DRY_RUN:-}"
 
@@ -110,4 +136,4 @@ main() {
   echo "create-secrets: done"
 }
 
-main "$@"
+main

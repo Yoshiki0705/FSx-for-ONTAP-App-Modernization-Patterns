@@ -23,11 +23,13 @@
 set -uo pipefail
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  echo "usage: standalone-probe.sh [-h|--help]   (input comes from APPMOD_* variables; no arguments)"
   sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 
 die() { local code="$1"; shift; echo "standalone-probe: $*" >&2; exit "$code"; }
+[ "$#" -eq 0 ] || die 2 "unknown argument: $1"
 
 RUN_ID="${APPMOD_RUN_ID:-}"
 PROBE="${APPMOD_PROBE_BIN:-}"

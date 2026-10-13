@@ -47,3 +47,11 @@ of the Hub's guard.
 | A failing gate hidden by a pipe | Read the exit status directly: `make all > /tmp/all.log 2>&1; echo $?` |
 | A one-level glob skips templates one directory deeper | `cfn` finds templates recursively |
 | cfn-lint warnings read as a pass | Any non-zero exit fails the gate |
+
+Running `--help` on a script that does not parse arguments runs it. A script with no argument
+handling treats `--help` as a normal invocation, so reading its usage can create resources. Every
+executable script under `scripts/` handles `-h` and `--help` before any side effect and rejects an
+unknown argument with exit 2. [`scripts/tests/check_help_is_safe.py`](../../scripts/tests/check_help_is_safe.py)
+enforces this: it runs each script with `--help`, `-h`, and a bogus flag against stub `aws`, `ssh`,
+`curl`, `gh`, and `scp` commands, and fails when a stub is called, a file appears, or the usage is
+missing. A new executable script not covered by it fails the gate.

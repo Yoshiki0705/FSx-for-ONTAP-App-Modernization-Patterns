@@ -12,9 +12,11 @@
 set -euo pipefail
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  echo "usage: host-hashes.sh [-h|--help]   (input comes from APPMOD_HASH_DIRS; no arguments)"
   sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 fi
+[ "$#" -eq 0 ] || { echo "host-hashes: unknown argument: $1" >&2; exit 2; }
 
 DIRS="${APPMOD_HASH_DIRS:-}"
 if [ -z "$DIRS" ]; then
