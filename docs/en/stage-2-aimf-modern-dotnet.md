@@ -307,18 +307,25 @@ Results (`verified`):
   The UUID, security style, `seed/` inventory, export policy, snapshots and snapshot locking values
   were unchanged, and `check-no-locking.sh` passed.
 
-## Cost estimates
+## Cost estimates and observed costs
 
-The following are estimates (unit price × quantity), not invoiced amounts. Invoices have not been
-observed; the Cost Explorer check is due on 2026-10-13.
+The table below is estimates (unit price × quantity), not invoiced amounts. The observed amounts are values read from Cost Explorer on 2026-10-13, with `Estimated: true` (before billing closes) and Credit and Refund excluded. No invoice was checked.
 
 | Item | Estimate | Note |
 |---|---|---|
-| Base (approval for 72 hours) | $57.71 (approved 2026-10-11T02:07:07Z) | Torn down after about 33 hours. This document does not compute an amount for 33 hours ([Verification environment](environment.md)) |
+| Base (approval for 72 hours) | $57.71 (approved 2026-10-11T02:07:07Z) | Torn down after about 33.6 hours. The estimate prorated to 33.6 hours and the tag-attributed observed amount of $21.19 (excluding AD) are in [Verification environment](environment.md) |
 | atx analysis transformation | about $3.24 | The ceiling estimate is $4.20 |
 | atx `AWS/dotnet-modernization` | $0 within the no-cost quota, about $4.87 outside it | The ceiling estimate is $10.50. The remaining quota is not observable |
 
 The Kiro credits of the AIMF session (about 284) are not converted to an amount.
+
+The observed AWS Transform amount cannot be attributed by tag the way the base can. It is a service-level value, and the
+account is shared with other uses, so it cannot be asserted to be this verification's cost alone. Cost Explorer showed AWS Transform at
+3.62215 USD on 2026-10-11 (0 on 2026-10-12). Divided by the rate of $0.035 per agent minute, that is 103.49 minutes.
+atx's own records are 92.46 minutes for the analysis and 139.00 minutes for dotnet-modernization (231.46 minutes in total),
+and 103.49 minutes matches neither 92.46 nor 231.46. The difference is unexplained. The scope of the free tier or billing rounding are possible
+causes, and neither was checked. The 3.62215 USD is within the estimated ceilings (analysis $4.20, dotnet $10.50).
+It is one observation and not an invoice.
 
 ## The record and publication boundary
 

@@ -31,7 +31,8 @@ mismatch are in "What cannot be reproduced".
 | The two AWS Transform custom (atx) transformations | The procedure can be reproduced | `scripts/aimf/run-atx.sh` | Output and agent minutes differ from run to run |
 | Stage 3 (Lambda and S3 Access Points) | Yes | `app/modern/src/DocIntake.Lambda`, `scripts/deploy.sh stage3`, `scripts/measure/lambda_invoke.py` | `lambda_invoke.py` has not been run in this form |
 | Price fixtures for estimates | Yes | `scripts/fetch-prices.py` | The filter values were not re-checked against a live environment |
-| Invoiced amounts | No | None | Invoiced amounts were not observed. Estimates only |
+| Attributing observed costs (Cost Explorer) | Yes | The section "How to attribute observed costs" | Values carry `Estimated: true` and are not invoices. In a shared account, costs that tag and resource ID cannot attribute (AD and others) remain |
+| Invoiced amounts (invoices) | No | None | Invoices were not observed |
 
 ## Assumed accounts, tools, and versions
 
@@ -760,20 +761,66 @@ Read and write the same volume from Lambda through FSx for ONTAP S3 Access Point
 
 ## Time and cost expectations
 
-All of the following are estimates or single observations; invoiced amounts were not observed. A check in
-Cost Explorer was planned for 2026-10-13.
+All of the following are estimates or single observations; invoices were not observed. The observed amounts were read from Cost Explorer on 2026-10-13
+(`Estimated: true`) and cover only what tag and resource ID could attribute ([Verification environment](environment.md)).
 
 | Item | Value | Basis |
 |---|---|---|
-| Base estimate | $57.71 for 72 hours (approved 2026-10-11) | Approval record. Torn down after about 33 hours |
+| Base estimate | $57.71 for 72 hours (approved 2026-10-11) | Approval record. Torn down after about 33.6 hours |
+| Base observed amount (what tag could attribute) | $21.19 (FSx for ONTAP $12.03, EC2 $6.36, VPC $2.77, S3 $0.02; excluding AD) | Cost Explorer, read on 2026-10-13, `Estimated: true`, Credit and Refund excluded |
 | Base creation time | About 33 minutes (2026-10-07, once) | [Verification environment](environment.md) |
 | atx analysis transformation | 92.46 agent minutes, an estimate of about $3.24 | 2026-10-11, $0.035 / agent minute |
 | atx dotnet transformation | 139.00 agent minutes. $0 if within the free tier, about $4.87 if outside it | 2026-10-11. The remaining free tier cannot be observed |
+| AWS Transform observed amount | $3.62215 (2026-10-11, service level) | Equivalent to 103.49 minutes, which does not match atx's records (92.46 and 139.00 minutes). The reason is unconfirmed ([stage 2](stage-2-aimf-modern-dotnet.md)) |
 | Approved amount for each stage 3 run | $0.04, $0.01, $0.01 | Approval records of 2026-10-11 and 2026-10-12 |
 | Kiro credits | About 284 (limit 5,000) | One session on 2026-10-12 |
 
 Credits are not converted to money. The wall-clock time of the AIMF session is not listed because it
 includes the time for human approvals and Q&A.
+
+## How to attribute observed costs
+
+> Evidence tier: the procedure is `documented` (the two sources below). The values were read on 2026-10-13, once each,
+> and the commands that produced them were not recorded. The commands below are templates built from the API reference,
+> not a record of what was run.
+
+In a shared account, a Cost Explorer service total is not this verification's cost, because other uses are mixed in.
+This verification reported only two attributions as observed amounts. A cost that falls under neither is written separately as an estimate.
+
+1. Filter by tag. `aws:cloudformation:stack-name`, applied by CloudFormation, is an AWS-generated tag, so it appears in Cost Explorer only after it is
+   activated as a cost allocation tag in Billing and Cost Management ([Using AWS-generated tags](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/aws-tags.html)).
+   Set the values to the stack names (`appmod-base`, `appmod-stage3`).
+2. Query by resource ID. `GetCostAndUsageWithResources` requires grouping or filtering by resource ID.
+   Resource-level data must be enabled in the Cost Explorer settings, the period must be within the last 14 days, and resource-level granularity is daily (hourly only for EC2)
+   ([GetCostAndUsageWithResources](https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_GetCostAndUsageWithResources.html)).
+   After 14 days it can no longer be queried, so read it soon after teardown.
+
+In both reads, the metric is `UnblendedCost` and the `RECORD_TYPE` values Credit and Refund are excluded. While `Estimated` in the result is `true`, the value is before billing closes.
+
+```bash
+# 1. Filter by tag (by service, daily)
+cat > /tmp/ce-filter.json <<'JSON'
+{"And": [
+  {"Tags": {"Key": "aws:cloudformation:stack-name", "Values": ["appmod-base", "appmod-stage3"]}},
+  {"Not": {"Dimensions": {"Key": "RECORD_TYPE", "Values": ["Credit", "Refund"]}}}
+]}
+JSON
+aws ce get-cost-and-usage --time-period Start=2026-10-11,End=2026-10-13 --granularity DAILY \
+  --metrics UnblendedCost --filter file:///tmp/ce-filter.json \
+  --group-by Type=DIMENSION,Key=SERVICE
+
+# 2. Query by resource ID (find the SERVICE value with aws ce get-dimension-values --dimension SERVICE)
+aws ce get-cost-and-usage-with-resources --time-period Start=2026-10-11,End=2026-10-13 --granularity DAILY \
+  --metrics UnblendedCost \
+  --filter '{"And": [{"Dimensions": {"Key": "SERVICE", "Values": ["<SERVICE value>"]}}, {"Not": {"Dimensions": {"Key": "RECORD_TYPE", "Values": ["Credit", "Refund"]}}}]}' \
+  --group-by Type=DIMENSION,Key=RESOURCE_ID
+```
+
+- `End` of the period is exclusive. To read the two days 2026-10-11 and 2026-10-12, write `End=2026-10-13`. Dates are UTC
+- Count the running hours from the stack events: creation start to deletion complete. This verification ran about 33.6 hours
+- To compare with the estimate, put the estimate's hourly rate times the running hours next to the tag-attributed observed amount, row by row. For a cost with neither a resource ID nor a tag, such as AD, show only the estimate and write "not attributable"
+- For a service that cannot be attributed by tag, such as AWS Transform, show the service-level value separately. It is a shared-account total, so do not write it as this verification's cost alone
+- Report the `Estimated` flag. Do not call the values invoice figures
 
 ## Teardown procedure
 
@@ -801,7 +848,7 @@ bash scripts/teardown.sh --apply --file-system-id fs-0123456789abcdef0 --linux-i
 - The ONTAP version moves. The first build (2026-10-07) was 9.19.1P2 and the rebuild (2026-10-11) was 9.19.1P3. A newly created file system can have a different version.
 - The output of atx and kiro-cli is not deterministic. The agent minutes of atx, the AIMF ADRs and code, and the ledger entries change on re-run. `app/modern` is the output of the 2026-10-12 session and does not match the output of a re-run.
 - Most measured values are one observation each, and values such as the write-visibility delay (about 8 seconds and under 100 ms) will not be identical. Look at whether the shape reproduces.
-- Invoiced amounts and the remaining free tier cannot be observed.
+- Invoices and the remaining free tier cannot be observed.
 - The earlier self-contained Linux build that `ship_build.py --base` refers to (the directory on the host) is not part of the published material. The first placement becomes the reconstructed procedure through S3.
 - The dynamic tab of the pricing page and the Price List SKUs change. `fetch-prices.py` records the read date, but it does not reproduce past values.
 

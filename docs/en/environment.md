@@ -200,6 +200,53 @@ $0.8015 per hour; times 11.6 hours this is about $9.3.
   requests are not included
 - For the resources Cost Explorer shows per resource (the file system and the two EC2 instances), 10-07 totals $5.38, an estimate (see the table in the teardown record). The billed amount for AD and the endpoints cannot be confirmed per resource
 
+## Observed costs of the rebuilt base (2026-10-11 to 2026-10-12)
+
+> Evidence tier: `verified` (Cost Explorer read on 2026-10-13, ap-northeast-1, one observation each).
+> The values carry `Estimated: true` (before billing closes) and are not invoice figures. The query
+> method is in "How to attribute observed costs" in the [reproduction guide](reproduce.md).
+
+Four conditions applied to the reads: the metric was `UnblendedCost`, the granularity was daily, dates are UTC, and
+the `RECORD_TYPE` values Credit and Refund were excluded. With credits and refunds included, the values were near 0
+because of account credits; no invoice was checked.
+The account is shared with other uses, so a Cost Explorer service total is not this verification's cost.
+Only two attributions were used: values filtered by the tag `aws:cloudformation:stack-name` that CloudFormation
+applies (`appmod-base`, `appmod-stage3`), and values per resource ID (`GetCostAndUsageWithResources`).
+
+The base ran from 2026-10-11T02:08:54Z (stack creation) to about 11:44Z on 2026-10-12 (`appmod-base` deletion complete), about 33.6 hours.
+
+| Service | 2026-10-11 (USD) | 2026-10-12 (USD) | Total (USD) |
+|---|---|---|---|
+| FSx for ONTAP (per resource ID of the file system; matches the tag-filtered value) | 7.837 | 4.191 | 12.03 |
+| Amazon EC2 Compute (Windows t3.large, Linux t3.medium) | 4.160 | 2.199 | 6.36 |
+| Amazon VPC (interface endpoints and others) | 1.848 | 0.924 | 2.77 |
+| Amazon S3 (artifacts bucket) | 0.018 | 0.003 | 0.02 |
+| AWS Lambda | 0 | 0 | 0 |
+| Subtotal | - | - | 21.19 |
+
+- The subtotal is 21.19 USD while the rows sum to 21.18 USD. The one-cent difference is probably rounding, which was not checked. Daily subtotals are not shown
+- `EC2 - Other` was below 0.00001 on both days and is omitted from the table
+
+Two costs could not be attributed.
+
+- AWS Directory Service (AWS Managed Microsoft AD, Standard, two domain controllers) carries no resource ID in Cost Explorer (`NoResourceId`) and no CloudFormation tag. The account-wide value includes other uses, so this verification's share cannot be separated. For comparison, the estimate's hourly rate gives 0.146 USD/h × 33.6 h ≈ 4.91 USD. The 4.91 USD is an estimate, not an observed amount
+- AWS Secrets Manager (four secrets) and Amazon CloudWatch were 0 in the tag-filtered query. The estimate puts them at about 0.07 USD together, which cannot be separated from the account-wide value
+
+The estimate's hourly rates prorated to 33.6 hours agreed with the tag-attributed observed amounts within 3% per row (one observation each, ap-northeast-1, Single-AZ).
+
+| Item | Estimate hourly rate × 33.6 h (USD) | Observed (tag, USD) | Difference |
+|---|---|---|---|
+| FSx for ONTAP (SSD 1,024 GiB + throughput 128 MBps) | 12.41 | 12.03 | −3% |
+| EC2 (Windows + Linux) | 6.41 | 6.36 | −1% |
+| VPC interface endpoints | 2.82 | 2.77 | −2% |
+| AWS Managed Microsoft AD | 4.91 | Not attributable | n/a |
+| Total (attributable rows only) | 21.64 | 21.19 | −2% |
+
+The approved 72-hour estimate totals 57.71 USD, which prorates to about 26.9 USD for 33.6 hours. The range confirmed as observed
+amounts is 21.19 USD, which excludes AD.
+The agreement confirms hourly rates, not an invoice. The AD share is not confirmed as an observed amount.
+The Cost Explorer value for AWS Transform cannot be attributed by tag and is not in this table ([stage 2](stage-2-aimf-modern-dotnet.md)).
+
 ## How estimates are produced
 
 Before any billed operation, unit prices are re-fetched from the AWS Price List API to build an
