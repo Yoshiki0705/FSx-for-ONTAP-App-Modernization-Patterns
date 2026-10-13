@@ -50,6 +50,11 @@ Known limits (stated so that a pass is not read as more than it is):
   - Only the three argument shapes above are tried. A script that acts on `--help` only in
     combination with other arguments, or that reads stdin or an environment variable before parsing,
     is outside this check.
+  - Network access that does not go through a stubbed binary (a Python script using urllib or
+    boto3, a PowerShell script using AWS cmdlets) is not intercepted. probe_peer.py and the .ps1
+    files are in that set; only check (iv) and their own argument handling cover them.
+  - scripts/tests/ is reserved for harnesses and fixtures and is never scanned. An entry point
+    placed there is not checked, so do not put one there.
   - PowerShell scripts run under pwsh 7 here; the hosts run Windows PowerShell 5.1. A missing pwsh is
     an error, not a skip.
 
