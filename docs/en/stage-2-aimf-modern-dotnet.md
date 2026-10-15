@@ -316,16 +316,22 @@ The table below is estimates (unit price × quantity), not invoiced amounts. The
 | Base (approval for 72 hours) | $57.71 (approved 2026-10-11T02:07:07Z) | Torn down after about 33.6 hours. The estimate prorated to 33.6 hours and the tag-attributed observed amount of $21.18 (excluding AD) are in [Verification environment](environment.md) |
 | atx analysis transformation | about $3.24 | The ceiling estimate is $4.20 |
 | atx `AWS/dotnet-modernization` | $0 within the no-cost quota, about $4.87 outside it | The ceiling estimate is $10.50. The remaining quota is not observable |
+| AWS Managed Microsoft AD (second build) | about $4.91 (0.146 USD/h × 33.6 h) | Cannot be attributed by resource. The difference-method inference is $4.80 (−2%) and is not an observed amount ([difference-method estimate](environment.md#difference-method-estimate-for-aws-managed-microsoft-ad)) |
 
 The Kiro credits of the AIMF session (about 284) are not converted to an amount.
 
+AD carries neither a resource ID nor a tag, so it was inferred by the difference method rather than observed. Subtracting the steady baseline of the days
+without this verification (the mean of 2026-10-08 to 2026-10-10, 95.72 DC-hours/day) from the daily usage (DC-hours) leaves 41.40 on 2026-10-11 and 24.36 on 2026-10-12, 65.76 DC-hours in total.
+At 0.073 USD per DC-hour that is about 4.80 USD, within 2% of the 4.91 USD estimate. This is an inference that assumes the baseline is constant, not an attribution
+by resource. It cannot be used for the first build (2026-10-07), because the usage on 2026-10-06 was already half of the baseline, so the baseline is not constant there.
+
 The observed AWS Transform amount cannot be attributed by tag the way the base can. It is a service-level value, and the
-account is shared with other uses, so it cannot be asserted to be this verification's cost alone. Cost Explorer showed AWS Transform at
-3.62215 USD on 2026-10-11 (0 on 2026-10-12). Divided by the rate of $0.035 per agent minute, that is 103.49 minutes.
+account is shared with other uses, so it cannot be asserted to be this verification's cost alone. Cost Explorer showed AWS Transform Usage at
+3.62215 USD on 2026-10-11 (0 on 2026-10-12). Divided by the rate of $0.035 per agent minute, that is 103.49 minutes. The same day carries a Credit line of
+the same amount (−3.6221 USD), so the net was 0. Other credits in the account were not examined.
 atx's own records are 92.46 minutes for the analysis and 139.00 minutes for dotnet-modernization (231.46 minutes in total),
-and 103.49 minutes matches neither 92.46 nor 231.46. The difference is unexplained. The scope of the free tier or billing rounding are possible
-causes, and neither was checked. The 3.62215 USD is within the estimated ceilings (analysis $4.20, dotnet $10.50).
-It is one observation and not an invoice.
+and 103.49 minutes matches neither 92.46 nor 231.46. The difference is unexplained, and no cause is guessed here.
+The 3.62215 USD is within the estimated ceilings (analysis $4.20, dotnet $10.50). It is one observation and not an invoice.
 
 ## The record and publication boundary
 

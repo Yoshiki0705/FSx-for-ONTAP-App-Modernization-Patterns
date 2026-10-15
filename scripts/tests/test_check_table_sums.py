@@ -338,22 +338,33 @@ class CommandLineTests(unittest.TestCase):
 class RealTreeTests(unittest.TestCase):
     """The markers in the published docs bite, in both languages."""
 
-    MARKER = "<!-- sum-check: cols=4 -->"
+    # Observed-cost table, difference-method DC-hours table, per-build subtotal
+    # table, identified-total table. Order is the order in the page.
+    MARKERS = (
+        "<!-- sum-check: cols=4 -->",
+        "<!-- sum-check: cols=4 -->",
+        "<!-- sum-check: cols=3 -->",
+        "<!-- sum-check: cols=3 -->",
+    )
     PAGES = ("docs/ja/environment.md", "docs/en/environment.md")
 
     def read(self, rel: str) -> str:
         return (ROOT / rel).read_text(encoding="utf-8")
 
-    def test_both_languages_carry_the_identical_marker_once(self) -> None:
+    def test_both_languages_carry_the_identical_markers(self) -> None:
         for rel in self.PAGES:
             lines = [ln for ln in self.read(rel).splitlines() if "sum-check" in ln]
-            self.assertEqual(lines, [self.MARKER], rel)
+            self.assertEqual(tuple(lines), self.MARKERS, rel)
 
     def test_real_tree_passes(self) -> None:
         for rel in self.PAGES:
             report = checker.scan_text(self.read(rel), rel)
             self.assertEqual(report.problems, 0, message(report))
-            self.assertEqual((report.tables, report.columns), (1, 1), rel)
+            self.assertEqual(
+                (report.tables, report.columns),
+                (len(self.MARKERS), len(self.MARKERS)),
+                rel,
+            )
 
     def test_a_wrong_total_in_either_language_fails(self) -> None:
         for rel in self.PAGES:

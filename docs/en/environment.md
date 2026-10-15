@@ -230,7 +230,7 @@ The base ran from 2026-10-11T02:08:54Z (stack creation) to about 11:44Z on 2026-
 
 Two costs could not be attributed.
 
-- AWS Directory Service (AWS Managed Microsoft AD, Standard, two domain controllers) carries no resource ID in Cost Explorer (`NoResourceId`) and no CloudFormation tag. The account-wide value includes other uses, so this verification's share cannot be separated. For comparison, the estimate's hourly rate gives 0.146 USD/h × 33.6 h ≈ 4.91 USD. The 4.91 USD is an estimate, not an observed amount
+- AWS Directory Service (AWS Managed Microsoft AD, Standard, two domain controllers) carries no resource ID in Cost Explorer (`NoResourceId`) and no CloudFormation tag. The account-wide value includes other uses, so this verification's share cannot be separated by resource. For comparison, the estimate's hourly rate gives 0.146 USD/h × 33.6 h ≈ 4.91 USD. The 4.91 USD is an estimate, not an observed amount. The difference-method inference of 4.80 USD is under the next table and in "Difference-method estimate for AWS Managed Microsoft AD"
 - AWS Secrets Manager (four secrets) and Amazon CloudWatch were 0 in the tag-filtered query. The estimate puts them at about 0.07 USD together, which cannot be separated from the account-wide value
 
 The estimate's hourly rates prorated to 33.6 hours agreed with the tag-attributed observed amounts within 3% per row (one observation each, ap-northeast-1, Single-AZ).
@@ -240,13 +240,77 @@ The estimate's hourly rates prorated to 33.6 hours agreed with the tag-attribute
 | FSx for ONTAP (SSD 1,024 GiB + throughput 128 MBps) | 12.41 | 12.03 | −3% |
 | EC2 (Windows + Linux) | 6.41 | 6.36 | −1% |
 | VPC interface endpoints | 2.82 | 2.77 | −2% |
-| AWS Managed Microsoft AD | 4.91 | Not attributable | n/a |
+| AWS Managed Microsoft AD | 4.91 | 4.80 (difference method, inference) | −2% |
 | Total (attributable rows only) | 21.64 | 21.18 | −2% |
 
+The 4.80 USD in the AD row is an inference by the difference method, not an attribution by resource, and is excluded from the "attributable rows only" total (next section).
 The approved 72-hour estimate totals 57.71 USD, which prorates to about 26.9 USD for 33.6 hours. The range confirmed as observed
 amounts is 21.18 USD, which excludes AD.
-The agreement confirms hourly rates, not an invoice. The AD share is not confirmed as an observed amount.
-The Cost Explorer value for AWS Transform cannot be attributed by tag and is not in this table ([stage 2](stage-2-aimf-modern-dotnet.md)).
+The agreement confirms hourly rates, not an invoice. The AD share is not confirmed as an observed amount by resource.
+The Cost Explorer value for AWS Transform cannot be attributed by tag and is not in this table ([AWS Transform usage and the credit line of the same amount](#aws-transform-usage-and-the-credit-line-of-the-same-amount)).
+
+## Difference-method estimate for AWS Managed Microsoft AD
+
+> Evidence tier: `verified` (Cost Explorer read on 2026-10-13, ap-northeast-1, one observation each). The values carry
+> `Estimated: true`, and the assumption of the estimate is stated in the text. This is not an attribution by resource.
+
+The AD of the second build (2026-10-11 and 2026-10-12) cannot be attributed by resource. Cost Explorer's Directory Service
+carries no resource ID and no tag, and its value includes other directories in the same billing family. So the daily usage
+(`APN1-Std-MicrosoftAD-DC-Usage`, DC-hours) was read with the steady baseline of the days without this project subtracted
+(the difference method). The baseline is the mean of 2026-10-08 to 2026-10-10, 95.72 DC-hours per day.
+
+<!-- sum-check: cols=4 -->
+| Day (UTC) | Usage (DC-hours) | Baseline (DC-hours) | Difference (DC-hours) |
+|---|---|---|---|
+| 2026-10-11 | 137.12 | 95.72 | 41.40 |
+| 2026-10-12 | 120.08 | 95.72 | 24.36 |
+| Total | - | - | 65.76 |
+
+- The 65.76 DC-hours of difference agrees within 2% with the expected 2 DC × about 33.6 h ≈ 67.2 DC-hours
+- The unit price is 0.073 USD per DC-hour (7.012 USD ÷ 96.05 DC-hours on 2026-10-08), and 65.76 × 0.073 ≈ 4.80 USD, close to the estimate of 4.91 USD
+- The 4.80 USD is an inference that assumes the baseline is constant. It is not an attribution by resource and is not treated as an observed amount
+- It does not work for the first build (2026-10-07): usage on 2026-10-06 was 48.52 DC-hours, half of the baseline, so the baseline is not constant there. The first-build AD has only an estimate from the time-based rate (about 1.6 USD)
+
+## Identified cost of the whole verification
+
+> Evidence tier: `verified` (Cost Explorer read on 2026-10-13, ap-northeast-1, one observation each). The values carry
+> `Estimated: true` and are not invoice figures.
+
+The amounts attributed by the tags `appmod-base` and `appmod-stage3` (Usage only), per build.
+
+<!-- sum-check: cols=3 -->
+| Item | Day (UTC) | Amount (USD) |
+|---|---|---|
+| Tag-attributed: first build | 2026-10-07 | 6.31 |
+| Tag-attributed: second build | 2026-10-11 and 2026-10-12 | 21.18 |
+| Tag-attributed subtotal | - | 27.49 |
+
+The next table adds the AD inference and the AWS Transform usage to that subtotal, giving the "identified" amount.
+
+<!-- sum-check: cols=3 -->
+| Item | Basis | Amount (USD) |
+|---|---|---|
+| Tag-attributed subtotal | Table above | 27.49 |
+| AD, second build | Difference-method inference | 4.80 |
+| AWS Transform usage | Cost Explorer Usage line | 3.62 |
+| Identified | - | 35.91 |
+
+Not in this 35.91 USD:
+
+- AD of the first build: an estimate only, about 1.6 USD from the estimate's time-based rate
+- Secrets Manager, CloudWatch and Lambda: not separable, estimated at 0.1 to 0.2 USD together
+- The four secrets created by the accident: expected to be under one cent
+
+The AWS Transform usage was offset by a credit of the same amount on a separate line, so its net was 0. Other credits in the account were not examined.
+None of these figures is an invoice amount, and no invoice was checked.
+
+## AWS Transform usage and the credit line of the same amount
+
+> Evidence tier: `verified` (Cost Explorer read on 2026-10-13, ap-northeast-1, one observation). The cause of the gap between the minutes is unexplained.
+
+On 2026-10-11, Cost Explorer shows AWS Transform Usage of 103.49 agent minutes (3.6221 USD) and a Credit line of
+−3.6221 USD, a net of 0. The atx records show 92.46 minutes of analysis and 139.00 minutes of dotnet-modernization, 231.46 minutes in total.
+The gap between 103.49 and 231.46 minutes is unexplained. No cause is guessed here.
 
 ## How estimates are produced
 
