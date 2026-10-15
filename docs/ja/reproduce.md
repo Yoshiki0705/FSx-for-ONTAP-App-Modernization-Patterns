@@ -692,7 +692,8 @@ Lambda から FSx for ONTAP S3 Access Points 経由で同じボリュームを�
 | 基盤の作成時間 | 約 33 分（2026-10-07、1 回） | [検証環境](environment.md) |
 | atx の分析変換 | 92.46 agent minutes、約 $3.24 の見積り | 2026-10-11、$0.035 / agent minute |
 | atx の dotnet 変換 | 139.00 agent minutes。無料枠内なら $0、枠外なら約 $4.87 | 2026-10-11。枠の残りは観測できない |
-| AWS Transform の実額 | $3.62215（2026-10-11、サービス単位） | 103.49 分相当で、atx の記録（92.46 分と 139.00 分）と合わない。理由は未確認（[段階 2](stage-2-aimf-modern-dotnet.md)） |
+| AD の推定（2 回目の構築） | $4.80（見積り $4.91、−2%）。実額ではない | 差分法による推定。65.76 DC 時間 × 0.073 USD。1 回目には使えない（「実額の帰属方法」） |
+| AWS Transform の実額 | Usage $3.62215、Credit −$3.6221、純額 0（2026-10-11、サービス単位） | Usage は 103.49 分相当で、atx の記録（92.46 分と 139.00 分、合計 231.46 分）と合わない。理由は未解明（[段階 2](stage-2-aimf-modern-dotnet.md)） |
 | 段階 3 の各回の承認額 | $0.04、$0.01、$0.01 | 2026-10-11 と 2026-10-12 の承認記録 |
 | Kiro のクレジット | 約 284（上限 5,000） | 2026-10-12 の 1 セッション |
 
@@ -705,6 +706,7 @@ Lambda から FSx for ONTAP S3 Access Points 経由で同じボリュームを�
 
 共用のアカウントでは、Cost Explorer のサービス単位の合計は、この検証の費用ではない。他の用途の分が混ざる。
 本検証は、次の 2 つの帰属だけを実額として載せた。どちらにも載らない費用は、見積りと書き分ける。
+3 つ目の差分法は帰属ではなく推定で、実額としては載せない。
 
 1. タグで絞る。CloudFormation が付ける `aws:cloudformation:stack-name` は、AWS が付けるタグなので、Billing and Cost Management で
    コスト配分タグとして有効化しないと Cost Explorer に出ない（[Using AWS-generated tags](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/aws-tags.html)）。
@@ -713,8 +715,15 @@ Lambda から FSx for ONTAP S3 Access Points 経由で同じボリュームを�
    Cost Explorer の設定でリソース単位のデータを有効にしておく必要があり、期間は直近 14 日以内、リソース単位の粒度は日次（EC2 だけ時間単位）である
    （[GetCostAndUsageWithResources](https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_GetCostAndUsageWithResources.html)）。
    14 日を過ぎると引けないので、破棄の後は早めに読む。
+3. 差分法で推定する。タグもリソース ID も付かないサービス（本検証では AWS Managed Microsoft AD）に使う。
+   日次の使用量（`UsageQuantity`、本検証では `APN1-Std-MicrosoftAD-DC-Usage` の DC 時間）から、この検証が無い日の定常分（本検証では 2026-10-08 から 2026-10-10 の平均 95.72 DC 時間/日）を引き、
+   残りに単価（0.073 USD/DC 時間）を掛ける。2026-10-11 の 41.40 と 2026-10-12 の 24.36 で合計 65.76 DC 時間となり、約 4.80 USD だった。
+   - 仮定: 定常分が、この検証の期間も一定である。一致の確認として、期待値（2 DC × 稼働時間 ≒ 67.2 DC 時間）と比べる。本検証では 2% 以内だった
+   - 成り立たない条件: 検証の直前に使用量が定常分から外れているとき。1 回目の構築（2026-10-07）は、2026-10-06 の使用量が 48.52 DC 時間で定常分の半分だったため、使えなかった
+   - 結果はリソース単位の帰属ではなく推定で、「帰属できた行のみ」の合計には入れない
 
-どちらの読み取りでも、指標は `UnblendedCost`、`RECORD_TYPE` の Credit と Refund は除外する。結果の `Estimated` が `true` の間は請求確定前の値である。
+1 と 2 の読み取りでは、指標は `UnblendedCost`、`RECORD_TYPE` の Credit と Refund は除外する。結果の `Estimated` が `true` の間は請求確定前の値である。
+Credit の行を見るときだけ除外を外し、`RECORD_TYPE` でグループ化する（下の 4）。
 
 ```bash
 # 1. タグで絞る（サービス別、日次）
@@ -733,12 +742,23 @@ aws ce get-cost-and-usage-with-resources --time-period Start=2026-10-11,End=2026
   --metrics UnblendedCost \
   --filter '{"And": [{"Dimensions": {"Key": "SERVICE", "Values": ["<SERVICE の値>"]}}, {"Not": {"Dimensions": {"Key": "RECORD_TYPE", "Values": ["Credit", "Refund"]}}}]}' \
   --group-by Type=DIMENSION,Key=RESOURCE_ID
+
+# 3. 差分法に使う日次の使用量（定常分の日を含む期間を読む）
+aws ce get-cost-and-usage --time-period Start=2026-10-08,End=2026-10-13 --granularity DAILY \
+  --metrics UsageQuantity \
+  --filter '{"Dimensions": {"Key": "USAGE_TYPE", "Values": ["APN1-Std-MicrosoftAD-DC-Usage"]}}'
+
+# 4. Credit の行を見る（除外の絞りを付けず、RECORD_TYPE でグループ化する）
+aws ce get-cost-and-usage --time-period Start=2026-10-11,End=2026-10-13 --granularity DAILY \
+  --metrics UnblendedCost \
+  --filter '{"Dimensions": {"Key": "SERVICE", "Values": ["<SERVICE の値>"]}}' \
+  --group-by Type=DIMENSION,Key=RECORD_TYPE
 ```
 
 - 期間の `End` は含まれない。2026-10-11 と 2026-10-12 の 2 日を読むには `End=2026-10-13` と書く。日付は UTC
 - 稼働時間は、スタックイベントの作成開始と削除完了の時刻から数える。本検証は約 33.6 時間だった
-- 見積りとの比較は、見積りの時間単価に稼働時間を掛けた値と、タグで帰属できた実額を行ごとに並べる。AD のようにリソース ID もタグも付かない費用は、見積りだけを示して「帰属不可」と書く
-- AWS Transform のようにタグで帰属できないサービスは、サービス単位の値を別に示す。共用アカウントの合計なので、この検証だけの費用とは書かない
+- 見積りとの比較は、見積りの時間単価に稼働時間を掛けた値と、タグで帰属できた実額を行ごとに並べる。AD のようにリソース ID もタグも付かない費用は、見積りに差分法の推定を並べ、「帰属不可、推定」と書く
+- AWS Transform のようにタグで帰属できないサービスは、サービス単位の値を別に示す。共用アカウントの合計なので、この検証だけの費用とは書かない。Credit の行が同額で付いていれば、純額も書く（本検証の AWS Transform は純額 0）。ほかのクレジットは調べていないと書く
 - 結果の `Estimated` を載せる。請求書の値とは書かない
 
 ## 後片付けの手順

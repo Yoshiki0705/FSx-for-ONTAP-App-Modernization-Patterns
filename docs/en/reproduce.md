@@ -771,7 +771,8 @@ All of the following are estimates or single observations; invoices were not obs
 | Base creation time | About 33 minutes (2026-10-07, once) | [Verification environment](environment.md) |
 | atx analysis transformation | 92.46 agent minutes, an estimate of about $3.24 | 2026-10-11, $0.035 / agent minute |
 | atx dotnet transformation | 139.00 agent minutes. $0 if within the free tier, about $4.87 if outside it | 2026-10-11. The remaining free tier cannot be observed |
-| AWS Transform observed amount | $3.62215 (2026-10-11, service level) | Equivalent to 103.49 minutes, which does not match atx's records (92.46 and 139.00 minutes). The reason is unconfirmed ([stage 2](stage-2-aimf-modern-dotnet.md)) |
+| AD inference (second build) | $4.80 (estimate $4.91, −2%). Not an observed amount | Difference-method inference. 65.76 DC-hours × 0.073 USD. Not usable for the first build ("How to attribute observed costs") |
+| AWS Transform observed amount | Usage $3.62215, Credit −$3.6221, net 0 (2026-10-11, service level) | Usage is equivalent to 103.49 minutes, which does not match atx's records (92.46 and 139.00 minutes, 231.46 in total). The reason is unexplained ([stage 2](stage-2-aimf-modern-dotnet.md)) |
 | Approved amount for each stage 3 run | $0.04, $0.01, $0.01 | Approval records of 2026-10-11 and 2026-10-12 |
 | Kiro credits | About 284 (limit 5,000) | One session on 2026-10-12 |
 
@@ -786,6 +787,7 @@ includes the time for human approvals and Q&A.
 
 In a shared account, a Cost Explorer service total is not this verification's cost, because other uses are mixed in.
 This verification reported only two attributions as observed amounts. A cost that falls under neither is written separately as an estimate.
+The difference method in item 3 is an inference, not an attribution, and is not reported as an observed amount.
 
 1. Filter by tag. `aws:cloudformation:stack-name`, applied by CloudFormation, is an AWS-generated tag, so it appears in Cost Explorer only after it is
    activated as a cost allocation tag in Billing and Cost Management ([Using AWS-generated tags](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/aws-tags.html)).
@@ -794,8 +796,15 @@ This verification reported only two attributions as observed amounts. A cost tha
    Resource-level data must be enabled in the Cost Explorer settings, the period must be within the last 14 days, and resource-level granularity is daily (hourly only for EC2)
    ([GetCostAndUsageWithResources](https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_GetCostAndUsageWithResources.html)).
    After 14 days it can no longer be queried, so read it soon after teardown.
+3. Estimate by the difference method. Use it for a service that carries neither a tag nor a resource ID (here, AWS Managed Microsoft AD).
+   Subtract the steady baseline of the days without this verification (here, the mean of 2026-10-08 to 2026-10-10, 95.72 DC-hours/day) from the daily usage (`UsageQuantity`, here the DC-hours of `APN1-Std-MicrosoftAD-DC-Usage`),
+   and multiply the remainder by the unit price (0.073 USD per DC-hour). 41.40 on 2026-10-11 and 24.36 on 2026-10-12 make 65.76 DC-hours, about 4.80 USD.
+   - Assumption: the baseline stays constant during the verification. As a consistency check, compare with the expected value (2 DC × running hours ≈ 67.2 DC-hours). Here it was within 2%
+   - Failure condition: usage just before the verification already departs from the baseline. It did not work for the first build (2026-10-07), because the usage on 2026-10-06 was 48.52 DC-hours, half of the baseline
+   - The result is an inference, not an attribution by resource, and is kept out of the "attributable rows only" total
 
-In both reads, the metric is `UnblendedCost` and the `RECORD_TYPE` values Credit and Refund are excluded. While `Estimated` in the result is `true`, the value is before billing closes.
+In reads 1 and 2, the metric is `UnblendedCost` and the `RECORD_TYPE` values Credit and Refund are excluded. While `Estimated` in the result is `true`, the value is before billing closes.
+Lift the exclusion only to see Credit lines, and group by `RECORD_TYPE` (4 below).
 
 ```bash
 # 1. Filter by tag (by service, daily)
@@ -814,12 +823,23 @@ aws ce get-cost-and-usage-with-resources --time-period Start=2026-10-11,End=2026
   --metrics UnblendedCost \
   --filter '{"And": [{"Dimensions": {"Key": "SERVICE", "Values": ["<SERVICE value>"]}}, {"Not": {"Dimensions": {"Key": "RECORD_TYPE", "Values": ["Credit", "Refund"]}}}]}' \
   --group-by Type=DIMENSION,Key=RESOURCE_ID
+
+# 3. Daily usage for the difference method (read a period that includes the baseline days)
+aws ce get-cost-and-usage --time-period Start=2026-10-08,End=2026-10-13 --granularity DAILY \
+  --metrics UsageQuantity \
+  --filter '{"Dimensions": {"Key": "USAGE_TYPE", "Values": ["APN1-Std-MicrosoftAD-DC-Usage"]}}'
+
+# 4. See Credit lines (no exclusion filter; group by RECORD_TYPE)
+aws ce get-cost-and-usage --time-period Start=2026-10-11,End=2026-10-13 --granularity DAILY \
+  --metrics UnblendedCost \
+  --filter '{"Dimensions": {"Key": "SERVICE", "Values": ["<SERVICE value>"]}}' \
+  --group-by Type=DIMENSION,Key=RECORD_TYPE
 ```
 
 - `End` of the period is exclusive. To read the two days 2026-10-11 and 2026-10-12, write `End=2026-10-13`. Dates are UTC
 - Count the running hours from the stack events: creation start to deletion complete. This verification ran about 33.6 hours
-- To compare with the estimate, put the estimate's hourly rate times the running hours next to the tag-attributed observed amount, row by row. For a cost with neither a resource ID nor a tag, such as AD, show only the estimate and write "not attributable"
-- For a service that cannot be attributed by tag, such as AWS Transform, show the service-level value separately. It is a shared-account total, so do not write it as this verification's cost alone
+- To compare with the estimate, put the estimate's hourly rate times the running hours next to the tag-attributed observed amount, row by row. For a cost with neither a resource ID nor a tag, such as AD, show the estimate with the difference-method inference beside it and write "not attributable, inference"
+- For a service that cannot be attributed by tag, such as AWS Transform, show the service-level value separately. It is a shared-account total, so do not write it as this verification's cost alone. If a Credit line of the same amount is present, also write the net (AWS Transform here: net 0), and say that other credits were not examined
 - Report the `Estimated` flag. Do not call the values invoice figures
 
 ## Teardown procedure
