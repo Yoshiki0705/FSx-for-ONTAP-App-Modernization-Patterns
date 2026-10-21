@@ -1,0 +1,29 @@
+# Probe strings that other repositories pin inside THIS repository's files. Generated - do not
+# hand-edit.
+#
+# Refresh with: python3 tools/check_inbound_probes.py --refresh   (make inbound-probes-refresh)
+#
+# Why this file is load-bearing: each string below is an interface. Editing the line it sits on
+# breaks a gate in the repository named in the first column, and nothing in that repository can
+# warn us first - the check runs there, against a tree they do not have.
+#
+# The gate here enforces more than presence. A string must occur EXACTLY ONCE, in body text:
+#   - zero occurrences  their gate fails, and reads as a retraction rather than as our edit
+#   - two or more       their gate stays green while one copy can be reworded, so it guards nothing
+#   - heading only      the section keeps its title while the content is replaced
+#
+# Writing prose about a pinned string is the ordinary way to create a second copy. Describe it
+# instead of quoting it. To change a pinned sentence, keep the quoted substring or tell the
+# repository in the first column so it can re-pin, then refresh this file.
+#
+# COVERAGE IS A FLOOR, NOT A CEILING. Discovery reads each sibling's published contract. Siblings
+# that publish none are listed at the end as unknown. A probe nobody published cannot be found here.
+#
+# role: retraction = expected to survive; reread = quotes a min/max, so firing means "read again".
+#
+# Format: <citing repo> TAB <our path> TAB <role> TAB <probe>, sorted.
+FSx-for-ONTAP-Adoption-Playbook	docs/ja/reproduce.md	retraction	請求書は観測していない
+FSx-for-ONTAP-Adoption-Playbook	docs/ja/stage-1-multiprotocol.md	retraction	性能の主張ではない
+FSx-for-ONTAP-Adoption-Playbook	docs/ja/stage-2-aimf-modern-dotnet.md	retraction	機能欠落の確認は REFUTED、スコープの確認は UPHELD
+
+# unknown (publishes no contract; absence of a contract is not absence of probes): FSx-for-ONTAP-Container-Datastore-Patterns FSx-for-ONTAP-S3AccessPoints-Serverless-Patterns

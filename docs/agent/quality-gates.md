@@ -19,6 +19,7 @@ the same tree with the same tool versions. `make all` runs everything and is the
 | `secrets` | gitleaks (`.gitleaks.toml`) | Secrets in the working tree; CI scans full history |
 | `links` | `tools/check_links.py` | Internal Markdown links resolve |
 | `drift` | `tools/check_make_targets.py` | Every `make` target named in code spans or code blocks of `AGENTS.md` and `CONTRIBUTING.md` has a rule in the Makefile; a missing file is skipped |
+| `inbound-probes` | `tools/check_inbound_probes.py` | Each string a sibling repository pins in this repository's files (listed in `docs/agent/inbound-probe-contract.txt`) occurs exactly once, in body text, in the file it is pinned to. Absent, quoted a second time, only in a heading, only in a code fence, and a missing file all fail |
 | `app-modern` | dotnet SDK 10 | `dotnet build` and `dotnet test` of `app/modern/DocIntake.sln` in Release; fails when the SDK is missing or is not version 10 |
 | `test` | unittest, `--selftest` | Detector tests, the irreversible-operation guard, and the audit's own rules |
 
@@ -29,6 +30,15 @@ completed with success. A workflow with no run for the SHA counts as a failure, 
 latest-results view of `gh pr checks` can return the previous commit's verdict. Exit 1 is a
 failure or a missing run, exit 2 is "still running", and `WAIT=<seconds>` polls every 30 seconds.
 A workflow with a `paths:` filter is required only when a changed file matches it.
+
+`make inbound-probes-refresh` is not part of `make all` either, because it needs `gh` and the
+network. It rewrites `docs/agent/inbound-probe-contract.txt` from the
+`docs/agent/cross-repo-probe-contract.txt` that each sibling repository named in our Markdown
+publishes, and keeps only the rows pinned here. Only a 404 records a sibling as unknown; any other
+failure (rate limit, 5xx, timeout, no `gh`) stops the refresh before it writes, because recording
+a failed fetch as "publishes no contract" would delete that sibling's rows. Coverage is a floor: a
+string nobody published is not in the file. Refresh before editing a document the file names, and
+read the diff before committing.
 
 A table opts in to `table-sums` with a marker on the line directly above its header row. `cols=` lists
 the 1-based numeric columns to verify. `tol=` (optional) accepts a total stated after rounding, within
@@ -55,8 +65,10 @@ Each detector runs its selftest before scanning, so a rule that stopped matching
 instead of reporting an empty result as a pass.
 
 `tools/check_links.py`, `tools/frontmatter.py`, `tools/ai_style_rules.py`,
-`tools/check_diagram_fonts.py`, and `tools/check_diagram_flow.py` are copied from the
-Hub; `tools/check_heading_style.py`, `tools/check_role_labels.py`, and `tools/test_ai_style.py`
+`tools/check_diagram_fonts.py`, `tools/check_diagram_flow.py`, and `tools/probe_strength.py` are
+copied from the Hub (`probe_strength.py` byte for byte, so the exactly-once rule is the Hub's, not
+a second reading of it); `tools/check_inbound_probes.py` is written for this repository after the
+Hub's tool of the same name. `tools/check_heading_style.py`, `tools/check_role_labels.py`, and `tools/test_ai_style.py`
 from the Container-Datastore Spoke. `scripts/guard_irreversible_ops.py` is a byte-identical copy
 of the Hub's guard.
 
