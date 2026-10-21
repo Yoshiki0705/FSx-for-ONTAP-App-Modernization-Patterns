@@ -21,6 +21,12 @@ Cross-references follow one rule: **the Hub journey map alone holds the diagram 
 repositories relate.** This repository links only to that map and to specific pages of adjacent
 Spokes. Do not copy general ONTAP knowledge from the Hub; link to it.
 
+Other repositories pin sentences in our documents, and their gates break when one is reworded.
+`docs/agent/inbound-probe-contract.txt` lists them, and `make inbound-probes` fails when a pinned
+string is gone, quoted a second time, or left only in a heading. To change such a sentence, keep
+the quoted substring or tell the repository named in that file first. Describe a pinned string in
+other prose instead of quoting it.
+
 Bilingual: Japanese is primary (`README.md`, `docs/ja/`), English mirrors it (`README.en.md`,
 `docs/en/`) with the same section structure. Code, identifiers, and commit messages are English.
 

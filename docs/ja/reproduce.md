@@ -29,7 +29,7 @@ Linux 上の .NET、さらに AWS Lambda へ移す検証（2026-10-07 から 202
 | 段階 3（Lambda と S3 Access Points） | できる | `app/modern/src/DocIntake.Lambda`、`scripts/deploy.sh stage3`、`scripts/measure/lambda_invoke.py` | `lambda_invoke.py` はこの形では未実行 |
 | 見積りの価格ファイル | できる | `scripts/fetch-prices.py` | フィルタの値は実環境で再確認していない |
 | 実額の帰属（Cost Explorer） | できる | 「実額の帰属方法」の節 | 値は `Estimated: true` で請求書ではない。共用アカウントでは、タグとリソース ID で帰属できない費用（AD など）が残る |
-| 請求額（請求書） | できない | なし | 請求書は観測していない |
+| 請求額（請求書） | できない | なし | 請求書の値は取得していない |
 
 ## 前提とするアカウント・ツール・版
 

@@ -152,6 +152,7 @@ PY_UNITTEST := tools.test_ai_style scripts.tests.test_estimate scripts.tests.tes
                scripts.tests.test_reuse_permutations scripts.tests.test_probe_merge \
                scripts.tests.test_no_stub_scripts scripts.tests.test_pr_verify \
                scripts.tests.test_check_make_targets scripts.tests.test_check_table_sums \
+               scripts.tests.test_check_inbound_probes \
                scripts.tests.test_measure_ssm_run scripts.tests.test_measure_ship_build \
                scripts.tests.test_measure_standalone_probe scripts.tests.test_measure_pairs \
                scripts.tests.test_measure_worker scripts.tests.test_measure_windows_scripts \
@@ -191,8 +192,19 @@ drift: ## 文書が挙げる make ターゲットが Makefile に実在するか
 	@$(PYTHON) tools/check_make_targets.py --selftest >/dev/null
 	$(PYTHON) tools/check_make_targets.py
 
+.PHONY: inbound-probes
+inbound-probes: ## 他リポジトリが pin した文字列が指定の文書にちょうど 1 回あるか（自己テストの後に走査）
+	@$(PYTHON) tools/check_inbound_probes.py --selftest >/dev/null
+	$(PYTHON) tools/check_inbound_probes.py
+
+# Not part of `ci` or `all`: it needs the network and gh. It rewrites docs/agent/inbound-probe-contract.txt
+# from the contracts sibling repositories publish, and writes nothing when a sibling's answer is undetermined.
+.PHONY: inbound-probes-refresh
+inbound-probes-refresh: ## 兄弟リポジトリの公開契約を読み直して契約ファイルを更新（gh とネットワーク必須）
+	$(PYTHON) tools/check_inbound_probes.py --refresh
+
 .PHONY: ci
-ci: lint audit links drift app-modern test ## CI が呼ぶ集約ターゲット
+ci: lint audit links drift inbound-probes app-modern test ## CI が呼ぶ集約ターゲット
 
 .PHONY: all
 all: ci ## コミット前のゲート（ci と同じ）
