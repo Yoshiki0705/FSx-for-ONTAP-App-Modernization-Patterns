@@ -1,0 +1,13 @@
+# Ruff configuration. The version is pinned in requirements-dev.txt; this file pins the Python
+# version Ruff lints against.
+#
+# target-version matters because the scripts under scripts/ run on the measurement hosts, not only
+# in CI. The Linux host is Amazon Linux 2023, whose system python3 (/usr/bin/python3) is 3.9 for
+# the life of AL2023. So 3.9 is the floor the code must stay runnable on.
+#
+# Without this, Ruff 0.17 defaults to 3.9 anyway today, but the default has drifted before (0.8
+# moved it from 3.8 to 3.9) and is documented to move again. Pinning keeps a tooling bump from
+# silently rewriting code to a newer-Python idiom: 0.17 wants UP017 (datetime.timezone.utc ->
+# datetime.UTC) and FURB162, and datetime.UTC is a 3.11 alias that raises AttributeError on the
+# 3.9 host. The fix is to state the floor, not to apply the rewrite.
+target-version = "py39"

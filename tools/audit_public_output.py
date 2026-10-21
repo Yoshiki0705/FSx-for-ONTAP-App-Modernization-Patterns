@@ -75,7 +75,11 @@ RULES: list[tuple[str, re.Pattern[str], str]] = [
     ),
     (
         "pii",
-        re.compile(r"(?<![\d.])(?!123456789012)\d{12}(?![\d.])"),
+        # A standalone 12-digit run. The hex-letter lookarounds skip a digit run that sits inside a
+        # longer hex token such as a commit SHA pinned with `uses: ...@<sha>`: a 40-char SHA often
+        # contains 12 consecutive digits that are not an account ID. A real account ID is bounded by
+        # non-hex characters on both sides.
+        re.compile(r"(?<![\d.a-fA-F])(?!123456789012)\d{12}(?![\d.a-fA-F])"),
         "12-digit number (AWS account ID?); use 123456789012",
     ),
     (
@@ -187,6 +191,8 @@ SELFTEST_ACCEPT = [
     "See github.com/Yoshiki0705/FSx-for-ONTAP-App-Modernization-Patterns.",
     "npm install -g markdownlint-cli2@0.22.1",
     "[PNG](../_assets/images/png/diagram@2x.png)",  # image scale suffix, not an address
+    # 12-digit run inside a 40-char commit SHA pin, not an account ID.
+    "uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f123456789011d78e # v2.5.0",  # gitleaks:allow
 ]
 
 
