@@ -117,7 +117,9 @@ sent in the run log.
 ## Results of the two AWS Transform custom transformations
 
 > Evidence tier: `verified`. 2026-10-11, ap-northeast-1, atx 3.18.0. Each transformation was run
-> once, against the same sample app (about 900 to 1,089 lines of `.cs`).
+> once, against the same sample app (10 `.cs` files, 935 lines; sum of `wc -l`). The atx run record reported
+> 15 files and 1,089 lines in total, including project and configuration files. `wc -l` over the same tree gives
+> 1,124 lines for 15 files; the cause of the difference from atx's counting is unverified.
 
 The run ids for running the transformed code on Linux are `s2-20261011T125351Z`,
 `s2f-20261011T152320Z` and `s2g-20261011T154203Z`. Costs are estimates (agent minutes × unit price),
@@ -157,7 +159,7 @@ file reads on the workstation from billing.
 
 The caps rested on pre-run hypotheses, which were compared with the actual minutes after the run.
 
-- The sample is about 900 lines of C# (the `.cs` files under `app/legacy/`). The analysis transformation took 92.46 minutes for about 900 to 1,089 lines. This is a single observation and does not carry over to other samples
+- The sample is 10 `.cs` files, 935 lines (sum of `wc -l` under `app/legacy/`). atx reported 15 files and 1,089 lines, including non-`.cs` files. The analysis transformation took 92.46 minutes. This is a single observation and does not carry over to other samples
 - `AWS/dotnet-modernization`: the pricing page example (a 50k-line .NET Framework solution at about
   2,800 agent minutes, about 0.056 per line) gives about 50 minutes at this size. Allowing for the
   fixed assessment and planning work and for repeated attempts when the build does not pass on the
