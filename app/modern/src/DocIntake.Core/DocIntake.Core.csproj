@@ -24,7 +24,7 @@
   <ItemGroup>
     <!-- Pinned (exact) version — no range. S3FileStore (ADR-1) uses AWSSDK.S3 object operations
          only (MP-27..30). Supply-chain discipline: exact pin, well-known package (awsdotnet). -->
-    <PackageReference Include="AWSSDK.S3" Version="4.0.104.5" />
+    <PackageReference Include="AWSSDK.S3" Version="4.0.104.6" />
   </ItemGroup>
 
 </Project>
