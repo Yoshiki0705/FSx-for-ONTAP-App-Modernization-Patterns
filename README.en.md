@@ -2,55 +2,19 @@
 
 [日本語](README.md) | **English**
 
-Amazon FSx for NetApp ONTAP keeps the data in place while one purpose-built `DocIntake` console application moves from .NET Framework 4.8 / Windows / SMB to .NET 10 / Linux / NFS, and then to .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points.
+This repository covers patterns for modernizing legacy applications and systems while their data remains on Amazon FSx for NetApp ONTAP. The current verified slice is one purpose-built `DocIntake` console application recorded from .NET Framework 4.8 / Windows / SMB to .NET 10 / Linux / NFS, and then to .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points. The broad scope is a project boundary, not verified support for every runtime or topology.
+
 The application input and output remain in the `appdata` volume on FSx for ONTAP; the application side and the protocol side change one stage at a time.
 
-> **Status**: Execution records use `verified`, one-off observations without confirmed reproduction use `field-observation`, template and test declarations use `documented`, and unexecuted or out-of-scope items use `open/not measured`. Values and behavior described here are sample runs in this verification configuration, not production performance, SLOs, service limits, or billing estimates.
+## Repository scope
 
-## Status and evidence boundary
+The durable scope of this repository is patterns for modernizing legacy applications and systems while their data remains on FSx for ONTAP. It covers pattern-specific requirements, designs, implementations, verification records, evidence boundaries, and navigation. The current `DocIntake` record is one example within this broad scope. It is not a compatibility statement for another runtime, application shape, execution topology, or access path.
 
-| Subject | Evidence label | Scope of the statement |
-|---|---|---|
-| Execution records for stages 0 to 3 | `verified` | Execution records for `DocIntake`. Each stage's configuration and unexecuted operations remain separate. |
-| ONTAP 9.19.1P2 record | `verified` | Initial build record from 2026-10-07. |
-| ONTAP 9.19.1P3 record | `verified` | Rebuild record from 2026-10-11 to 12. It is a separate historical record from P2. |
-| One-off supporting observations | `field-observation` | Observations without confirmed reproduction. They are not generalized into service limits or general performance values. |
-| Template declarations | `documented` | `provided.al2023` is an option declared in the template, but it was not executed. EventBridge Scheduler is declared disabled. |
-| Fake S3 tests | `documented` | The tests use an in-memory fake. They do not prove real FSx for ONTAP S3 Access Points behavior. |
-| Unexecuted or out-of-scope items | `open/not measured` | Listed in the unverified scope below. |
+## Current verified coverage
 
-## Current coverage
+Current verified coverage is limited to one `DocIntake` console application and its recorded execution paths. The source is .NET Framework 4.8 / Windows / SMB. Stage 2 compares the old Windows build with the modernized Linux build; it is not Windows .NET 10 verification. Stage 3 records the .NET 10 managed-runtime Lambda and FSx for ONTAP S3 Access Points path. The table below is the repository's only full stage-detail table.
 
-| Subject | Evidence label | Current boundary |
-|---|---|---|
-| Application under test | `verified` | One purpose-built `DocIntake` console application. The coverage does not include a web layer or another runtime. |
-| Starting slice | `verified` | .NET Framework 4.8 / Windows / SMB. |
-| Stage 1 | `verified` | SMB plus NFS on the same `appdata` volume. The security style remains `ntfs`. |
-| Stage 2 | `verified` | .NET 10 / Linux / NFS. The comparison is an old Windows build versus the modernized Linux build; it is not Windows .NET 10 verification. |
-| Stage 3 | `verified` | .NET 10 managed-runtime `dotnet10` Lambda / FSx for ONTAP S3 Access Points. Invocation was manual; EventBridge Scheduler was disabled and its enabled execution is `open/not measured`. |
-| Stage 3 file locking | `open/not measured` | Exclusive-open/file-locking was skipped in the current `DocIntake` S3 adapter slice. This makes no universal S3 file-locking claim. |
-
-### Data destinations
-
-| Data | Evidence label | Destination |
-|---|---|---|
-| Application input and output | `verified` | The `appdata` volume on FSx for ONTAP. |
-| Aggregate Probe JSON | `verified` | A separate artifacts bucket, distinct from the `appdata` input and output. |
-| Lambda logs | `verified` | CloudWatch Logs. |
-
-## Scope
-
-| In scope | Out of scope |
-|---|---|
-| Moving one purpose-built `DocIntake` console application from .NET Framework 4.8 / Windows / SMB to .NET 10 / Linux / NFS, and then to .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points | Data migration from on-premises or VMware itself, and behavior of Java, Python applications, Python Lambda, other unverified Lambda runtimes, Node.js, Go, ASP.NET, ASP.NET Core, Web API, or Web UI |
-| Changing the application runtime and access protocol in stages while the FSx for ONTAP `appdata` volume stays shared | ECS / EKS, Multi-AZ, `unix` / `mixed` security styles, and other unverified runtime or topology claims |
-| Per-stage CloudFormation templates, verification scripts, and a purpose-built sample application | Container runtime verification. Containerization is a future branch owned by the adjacent Spoke. |
-| FSx for ONTAP-specific supplements for moving .NET Framework to modern .NET with AI Modernization Flow (AIMF) | Copies of the AIMF procedure or verification of other runtimes published by AIMF |
-
-## Stages
-
-Each stage assumes the previous one, and volume data is never moved.
-The volume keeps the NTFS security style for as long as Windows clients remain.
+Each stage assumes the previous one, and volume data is never moved. The volume keeps the NTFS security style for as long as Windows clients remain.
 
 | Stage | Application runtime | Access protocol | Main change |
 |---|---|---|---|
@@ -59,6 +23,30 @@ The volume keeps the NTFS security style for as long as Windows clients remain.
 | 2 | .NET 10 on Amazon EC2 (Linux) | NFS | Compare the old Windows build with the modernized Linux build. This is not Windows .NET 10 verification |
 | 3 | .NET 10 managed-runtime Lambda (`dotnet10`) | FSx for ONTAP S3 Access Points | Handle part of the processing through manual invocation. EventBridge Scheduler is disabled, and file locking is skipped in the current slice |
 | Branch | Containers | NFS / SMB / S3 Access Points | A future navigation and ownership path. Container runtime behavior is `open/not measured`; see the adjacent Spoke for details |
+
+## Evidence boundary
+
+Current evidence applies only to the `DocIntake` slice, the dedicated verification Single-AZ file system in `ap-northeast-1`, its one `appdata` volume, its `ntfs` security style, the recorded ONTAP 9.19.1P2 and 9.19.1P3 versions, and the recorded execution paths. `verified` means a reproduced execution for the named slice and environment; `field-observation` means a one-off observation without confirmed reproduction; `documented` means a declaration in a repository artifact or cited documentation and not runtime execution; and `open/not measured` means unexecuted, unsupported by the current record, or outside the verified slice.
+
+| Subject | Evidence label | Scope of the statement |
+|---|---|---|
+| Execution records for stages 0 to 3 | `verified` | Execution records for `DocIntake`. Each stage's configuration and unexecuted operations remain separate. |
+| ONTAP 9.19.1P2 record | `verified` | Initial build record from 2026-10-07. |
+| ONTAP 9.19.1P3 record | `verified` | Rebuild record from 2026-10-11 to 12. It is a separate historical record from P2. |
+| One-off supporting observations | `field-observation` | Observations without confirmed reproduction. They are not generalized into service limits or general performance values. |
+| Template declarations | `documented` | EventBridge Scheduler is declared disabled in the template, but it was not executed. |
+| Fake S3 tests | `documented` | The tests use an in-memory fake. They do not prove real FSx for ONTAP S3 Access Points behavior. |
+| Unexecuted or out-of-scope items | `open/not measured` | Listed in the non-generalization boundary in this section. |
+
+Current .NET evidence is not generalized to Java, Python, Node.js, Go, ASP.NET, ASP.NET Core, Web API, Web UI, ECS, EKS, Multi-AZ, `unix` or `mixed` security style, or any other unverified runtime, topology, or access path. Another runtime or configuration requires evidence for its own pattern.
+
+The current record does not establish Windows .NET 10 verification, universal S3 file-locking behavior, production performance, an SLO, a service limit, or a production cost estimate. A sample run remains distinct from a production estimate, this verification environment remains distinct from a general service limit, and a design consideration remains distinct from a legal or compliance judgment.
+
+| Data | Evidence label | Destination |
+|---|---|---|
+| Application input and output | `verified` | The `appdata` volume on FSx for ONTAP. |
+| Aggregate Probe JSON | `verified` | A separate artifacts bucket, distinct from the `appdata` input and output. |
+| Lambda logs | `verified` | CloudWatch Logs. |
 
 ## Document index
 
@@ -94,45 +82,15 @@ Handling of irreversible operations is in [AGENTS.md](AGENTS.md).
 
 Every deployment to AWS is preceded by an estimate of configuration, duration, and cost, and runs only after approval.
 
-## Relationship to AIMF
+## Future pattern roadmap
 
-[AI Modernization Flow](https://github.com/aws-samples/sample-ai-modernization-flow) ([introductory blog post, Japanese](https://aws.amazon.com/jp/blogs/news/aidm-introducing-ai-modernization-flow/)) is a workflow that has an AI agent carry out an application migration through fixed phases.
-For this Spoke, AIMF is only the application-modernization workflow boundary. This Spoke adds the FSx for ONTAP storage, protocol, permission, and evidence boundaries that AIMF does not cover. Other runtimes and topologies published by AIMF are not generalized from this Spoke's results.
-The working-record repository AIMF creates stays in an unpublished workspace; only excerpts of the results are published.
-The session run on 2026-10-12, the ADR summaries, and what the harness does and does not enforce mechanically are in [stage 2](docs/en/stage-2-aimf-modern-dotnet.md).
+Future patterns remain `open/not measured` until they are independently specified and evidenced. Each pattern requires its own requirements, design, evidence ledger, verification conditions, and publication criteria. The current `DocIntake` records are not reused as evidence for another pattern. The record must keep sample runs separate from production estimates and this environment separate from general service limits.
 
-## Unverified scope
+## Related responsibilities
 
-| Scope | Evidence label | Boundary |
-|---|---|---|
-| Other runtimes | `open/not measured` | Java, Python applications, Python Lambda, other unverified Lambda runtimes, Node.js, and Go are out of scope. |
-| Other application shapes | `open/not measured` | ASP.NET, ASP.NET Core, Web API, Web UI, HTTP ingress, authentication middleware, and long-running services are out of scope. |
-| Containers and topology | `open/not measured` | ECS, EKS, and Multi-AZ are out of scope. The container branch has no runtime verification. |
-| Security styles and versions | `open/not measured` | `unix`, `mixed`, other ONTAP versions, and multiple-volume behavior are out of scope. |
-| Unexecuted Stage 3 paths | `open/not measured` | Enabling EventBridge Scheduler and `provided.al2023` were not executed. `provided.al2023` is only an option declared in the template. |
-| S3 exclusive control | `open/not measured` | Exclusive-open/file-locking was skipped in the current DocIntake S3 adapter slice. This makes no universal S3 file-locking claim. |
+Only the Hub journey map holds the overall journey and the diagram of how the repositories relate. The links below are `documented` navigation and ownership context; their content does not expand this Spoke's verified coverage. AIMF remains the application-modernization workflow boundary. This Spoke adds the FSx for ONTAP storage, protocol, permission, and evidence boundaries that AIMF does not cover.
 
-The current .NET results are not generalized as evidence for another runtime, application shape, security style, or topology.
-
-## Future candidates
-
-Candidates A to D are future verification candidates, all `open/not measured`. This section gives only their names and responsibility boundaries. It does not set provisional runtime constants, configuration values, execution conditions, or candidate-specific designs.
-
-| Candidate | Future verification unit | Status |
-|---|---|---|
-| A | .NET ASP.NET Core Web API or background service | `open/not measured` |
-| B | Java / Spring runtime verification | `open/not measured` |
-| C | Python Worker / Lambda with FSx for ONTAP S3 Access Points | `open/not measured` |
-| D | ECS / EKS containerization | `open/not measured`. Container responsibility is coordinated with the Container-Datastore Spoke. |
-
-### Evidence requirements for each candidate
-
-Each candidate must be treated as a separate pattern. It must have an independent evidence ledger and independent verification conditions; the current `verified` records are not evidence for it. Candidate measurement, adoption, and publication scope will be decided in a separate future task after that evidence exists.
-
-## Related repositories
-
-Only the Hub journey map holds the overall journey and the diagram of how the repositories relate.
-The adjacent Spoke links below are `documented` navigation and ownership context. Their content does not expand this Spoke's execution records or verified coverage.
+[AI Modernization Flow](https://github.com/aws-samples/sample-ai-modernization-flow) ([introductory blog post, Japanese](https://aws.amazon.com/jp/blogs/news/aidm-introducing-ai-modernization-flow/)) is a workflow that has an AI agent carry out an application migration through fixed phases. The working-record repository AIMF creates stays in an unpublished workspace; only excerpts of the results are published. The session run on 2026-10-12, the ADR summaries, and what the harness does and does not enforce mechanically are in [stage 2](docs/en/stage-2-aimf-modern-dotnet.md).
 
 | To read about | Go to |
 |---|---|

@@ -9,11 +9,7 @@ Project instructions for AI coding agents working in this repository. This file 
 
 ## Project overview
 
-Patterns for modernizing an application whose data stays on Amazon FSx for NetApp ONTAP:
-.NET Framework on Windows EC2 over SMB (stage 0), multiprotocol SMB + NFS (stage 1), modern .NET
-on Linux EC2 over NFS via AI Modernization Flow (stage 2), and partial serverless through
-FSx for ONTAP S3 Access Points (stage 3). Containerization is a branch handed to the
-Container-Datastore Spoke. The stage table lives in [README.md](README.md).
+This repository covers patterns for modernizing legacy applications and systems while their data remains on Amazon FSx for NetApp ONTAP. The current verified slice is one `DocIntake` console application with the recorded paths from .NET Framework 4.8 / Windows / SMB to .NET 10 / Linux / NFS, and to .NET 10 managed-runtime Lambda through FSx for ONTAP S3 Access Points. Stage 2 compares the old Windows build with the modernized Linux build; it is not Windows .NET 10 validation. This slice is evidence for the named application and recorded environment, not a compatibility statement for the broader scope. Containerization is a branch handed to the Container-Datastore Spoke. The stage table lives in [README.md](README.md).
 
 This repository is a Spoke of
 [FSx-for-ONTAP-Adoption-Playbook](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook).
@@ -63,10 +59,11 @@ recommended option, and give every comparison a "how to choose" section.
 
 | Tier | Meaning | Requirement |
 |---|---|---|
-| `verified` | Reproduced by the author in a named environment | Date, region, ONTAP version, and configuration stated inline |
-| `documented` | Stated in AWS, NetApp, or AIMF documentation | Source URL; quote at most 30 consecutive words, paraphrase preferred |
-| `field-observation` | Observed once, not reproduced | Say so in the body; do not generalize |
-| `hypothesis` | Reasoned expectation, untested | Label as untested in the body |
+| `verified` | A reproduced execution for the named slice and recorded environment | State the date, region, ONTAP version, and configuration |
+| `field-observation` | A one-off observation without confirmed reproduction | Say so in the body and do not generalize |
+| `documented` | A declaration in a repository artifact or cited documentation, not runtime execution | Identify the artifact or source and paraphrase cited material |
+| `open/not measured` | Unexecuted, unsupported by the current record, or outside the verified slice | Keep it separate from every evidence label |
+| `hypothesis` | An explicitly untested expectation | It never upgrades `open/not measured`, `documented`, or `verified` |
 
 Never promote a tier without adding its evidence; downgrading is always allowed. Keep these
 distinct: sample run vs production estimate, this test environment vs a general service limit,
