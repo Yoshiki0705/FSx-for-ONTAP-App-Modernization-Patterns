@@ -1,21 +1,20 @@
 # Branch: containerization
 
-> Evidence tier: `hypothesis` (not measured). This document holds only the branch-point description
-> and a link to the neighboring Spoke.
+> Evidence label: `open/not measured`. This document defines a future navigation and ownership path. Verified container runtime behavior is outside this Spoke's scope.
 
-This Spoke covers the staged application modernization (stages 0 to 3). Containerization is not
-covered here; it is a branch handed to the Container-Datastore Spoke.
+## Branch position
 
-## Where the branch is
+This Spoke covers the staged modernization of `DocIntake` through stages 0 to 3.
+Containerization is a future branch owned by the Container-Datastore Spoke. This Spoke has not verified the container runtime, deployment, or data-store connection behavior.
 
-From stage 1 (multiprotocol) onward, the path splits between moving to modern .NET on Linux (stage
-2) and containerizing. The containerization procedure is not duplicated into this Spoke.
+From stage 1 (multiprotocol) onward, the path can be considered as either moving to .NET 10 on Linux over NFS (stage 2) or pursuing containerization. Container procedures and results are not duplicated into this Spoke.
 
-## Link to the neighboring Spoke
+## Ownership link
 
-- Container-Datastore Spoke: [FSx-for-ONTAP-as-Container-Datastore (link activated after publication)](https://github.com/Yoshiki0705/FSx-for-ONTAP-Container-Datastore-Patterns)
+- Container-Datastore Spoke: [FSx-for-ONTAP-as-Container-Datastore](https://github.com/Yoshiki0705/FSx-for-ONTAP-Container-Datastore-Patterns)
 
-## Predictions (unverified)
+This link is `documented` navigation and ownership context for the adjacent Spoke. Its content does not expand this Spoke's verified coverage.
 
-- The exact positioning of the branch point is settled with the neighboring Spoke after the stage-1
-  records exist.
+## Open boundary
+
+Container-Datastore containerization remains `open/not measured` in this Spoke. ECS, EKS, NFS / SMB / S3 Access Points from containers, cluster execution, deployment, and failure behavior have not been verified.
