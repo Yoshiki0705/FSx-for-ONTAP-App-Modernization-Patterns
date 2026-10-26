@@ -16,7 +16,7 @@
 
   <ItemGroup>
     <!-- Exact pin selected from the NuGet v3 package index on 2026-10-25. -->
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
   </ItemGroup>
 
   <ItemGroup>
