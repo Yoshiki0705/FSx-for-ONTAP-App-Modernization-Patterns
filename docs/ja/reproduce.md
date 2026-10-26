@@ -9,7 +9,7 @@
 > ID は `fs-0123456789abcdef0`、`123456789012`、`<management-ip>` のような置き換えで書く。
 
 Amazon FSx for NetApp ONTAP（以下 FSx for ONTAP）の 1 つのボリュームを使い、Windows 上の .NET Framework アプリを
-Linux 上の .NET、さらに AWS Lambda へ移す検証（2026-10-07 から 2026-10-12、ap-northeast-1）を、公開済みの
+Linux 上の .NET、さらに AWS Lambda へモダナイズする検証（2026-10-07 から 2026-10-12、ap-northeast-1）を、公開済みの
 スクリプトとアプリで再現する順序をまとめる。再現した結果が元の記録と一致することは約束しない。
 一致しない理由の候補は「再現できないこと」に書く。
 
@@ -86,7 +86,7 @@ atx は AWS Transform custom の CLI で、ap-northeast-1 のレジストリに 
 | 1 | 段階 0 に Linux EC2 を追加。SMB も継続 | NFS 4.1 | 同じボリューム `appdata` |
 | 2 | Linux EC2、.NET 10。AIMF v0.11.0 を kiro-cli で実行し、atx の分析結果を入力にした | NFS 4.1 と cifs 3.0 | 同じボリューム `appdata` |
 | 3 | AWS Lambda、.NET 10 | S3 API から FSx for ONTAP S3 Access Points | 同じボリューム `appdata` |
-| 分岐 | コンテナ移行（段階 1 以降の分岐） | この検証では測っていない | 矢印は引いていない |
+| 分岐 | コンテナ化（段階 1 以降の分岐） | この検証では測っていない | 矢印は引いていない |
 
 atx の dotnet-modernization による変換は、AIMF とは別に比較用として実行した。AIMF の Phase 0a は atx の分析結果を取り込んだ。データは段階 0 から 3 まで動かさず、変わるのは経路である。
 

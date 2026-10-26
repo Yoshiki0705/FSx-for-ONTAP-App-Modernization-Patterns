@@ -4,7 +4,7 @@
 > 2026-10-07 in ap-northeast-1 are `verified`; the rest describes procedure or lists what is still
 > unconfirmed.
 
-This describes the environment, its creation and its teardown for the verification that moves a
+This describes the environment, its creation and its teardown for the verification that modernizes a
 Windows .NET Framework application through four stages while the data stays on
 Amazon FSx for NetApp ONTAP (hereafter "FSx for ONTAP"). One environment is built in
 ap-northeast-1; stages 0 to 3 run on it in order, then it is deleted.

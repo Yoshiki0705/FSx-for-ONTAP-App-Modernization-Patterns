@@ -4,7 +4,7 @@
 > `verified`、そのほかは手順の説明か未確認の事項である。
 
 Amazon FSx for NetApp ONTAP（以下 FSx for ONTAP）にデータを置いたまま、
-Windows 上の .NET Framework アプリを 4 段階で移す検証の、環境の構成と作成・削除の手順をまとめる。
+Windows 上の .NET Framework アプリを 4 段階でモダナイズする検証の、環境の構成と作成・削除の手順をまとめる。
 環境は ap-northeast-1 に 1 つだけ作り、段階 0 から 3 を順に実施してから削除する。
 
 ## 不可逆機能の不使用

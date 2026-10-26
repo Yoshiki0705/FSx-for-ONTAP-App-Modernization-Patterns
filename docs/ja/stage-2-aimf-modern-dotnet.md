@@ -1,4 +1,4 @@
-# 段階 2: Linux 上の新しい .NET への移行
+# 段階 2: Linux 上の新しい .NET へのモダナイゼーション
 
 > 証拠区分: 節ごとに示す。実行した結果の節（AIMF セッション、AWS Transform custom の 2 つの変換、近代化後アプリの計測、
 > 実装の落とし穴）は `verified` で、run id と日付を本文に添えた。1 回だけの結果は「1 回の観測」と書いた。
@@ -6,7 +6,7 @@
 > 環境は特記がなければ ap-northeast-1、ONTAP 9.19.1P3、Single-AZ、1 ボリューム `appdata`（security style `ntfs`）。
 
 AI Modernization Flow（以下 AIMF、v0.11.0）の `dotnetfw-to-modern-dotnet` playbook で、
-移行元アプリを新しい .NET に移し、Linux EC2 上で NFS 経由に動かす。
+移行元アプリを新しい .NET にモダナイズし、Linux EC2 上で NFS 経由に動かす。
 Windows クライアントを段階 3 まで残すので、セキュリティスタイルは NTFS のまま維持する。
 
 ## 手順と実施状況
