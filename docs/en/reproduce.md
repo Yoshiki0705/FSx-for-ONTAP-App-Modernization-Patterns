@@ -11,7 +11,7 @@
 > IDs are written as placeholders such as `fs-0123456789abcdef0`, `123456789012`, and `<management-ip>`.
 
 This guide gives the order for reproducing, with the published scripts and apps, the verification
-(2026-10-07 to 2026-10-12, ap-northeast-1) that moves a .NET Framework app on Windows to .NET on Linux
+(2026-10-07 to 2026-10-12, ap-northeast-1) that modernizes a .NET Framework app on Windows to .NET on Linux
 and then to AWS Lambda, using one volume of Amazon FSx for NetApp ONTAP (FSx for ONTAP below).
 It does not promise that a reproduced result matches the original record. Candidate reasons for a
 mismatch are in "What cannot be reproduced".
@@ -90,7 +90,7 @@ The table below carries the same content as the figure; no fact appears only in 
 | 1 | A Linux EC2 instance added to stage 0; SMB continues | NFS 4.1 | The same volume, `appdata` |
 | 2 | Linux EC2, .NET 10. AIMF v0.11.0 run through kiro-cli, with the atx analysis as input | NFS 4.1 and cifs 3.0 | The same volume, `appdata` |
 | 3 | AWS Lambda, .NET 10 | S3 API to FSx for ONTAP S3 Access Points | The same volume, `appdata` |
-| Branch | Container migration (a branch from stage 1 onward) | Not measured here | No arrow is drawn |
+| Branch | Containerization (a branch from stage 1 onward) | Not measured here | No arrow is drawn |
 
 The atx dotnet-modernization transformation was run separately from AIMF, as a comparison. AIMF Phase 0a took in the atx analysis. The data does not move from stage 0 to 3; only the access path changes.
 

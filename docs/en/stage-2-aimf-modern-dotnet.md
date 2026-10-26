@@ -1,4 +1,4 @@
-# Stage 2: migrating to modern .NET on Linux
+# Stage 2: modernizing to .NET on Linux
 
 > Evidence tier: shown per section. The sections on results (the AIMF session, the two AWS Transform
 > custom transformations, measurements of the modernized app, implementation pitfalls) are `verified`
@@ -8,7 +8,7 @@
 > Single-AZ, one volume `appdata` (security style `ntfs`).
 
 Using the AI Modernization Flow (hereafter "AIMF", v0.11.0) `dotnetfw-to-modern-dotnet` playbook,
-migrate the source app to modern .NET and run it on the Linux EC2 over NFS. The Windows client
+modernize the source app to modern .NET and run it on the Linux EC2 over NFS. The Windows client
 stays through stage 3, so the security style is kept NTFS.
 
 ## Steps and what was done

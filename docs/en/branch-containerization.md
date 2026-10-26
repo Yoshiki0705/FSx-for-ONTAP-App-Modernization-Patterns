@@ -7,7 +7,7 @@
 This Spoke covers the staged modernization of `DocIntake` through stages 0 to 3.
 Containerization is a future branch owned by the Container-Datastore Spoke. This Spoke has not verified the container runtime, deployment, or data-store connection behavior.
 
-From stage 1 (multiprotocol) onward, the path can be considered as either moving to .NET 10 on Linux over NFS (stage 2) or pursuing containerization. Container procedures and results are not duplicated into this Spoke.
+From stage 1 (multiprotocol) onward, the path can be considered as either modernizing to .NET 10 on Linux over NFS (stage 2) or pursuing containerization. Container procedures and results are not duplicated into this Spoke.
 
 ## Ownership link
 

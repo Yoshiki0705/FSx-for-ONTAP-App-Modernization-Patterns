@@ -2,7 +2,7 @@
 
 **日本語** | [English](README.en.md)
 
-このリポジトリは、データを Amazon FSx for NetApp ONTAP に残したまま、レガシーなアプリケーションやシステムを近代化するパターンを扱います。現在検証済みなのは、`DocIntake` という 1 つの自作コンソールアプリを .NET Framework 4.8 / Windows / SMB から .NET 10 / Linux / NFS、さらに .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points へ移す記録です。広いスコープはプロジェクトの境界であり、すべてのランタイムやトポロジーの検証済みサポートを示しません。
+このリポジトリは、データを Amazon FSx for NetApp ONTAP に残したまま、レガシーなアプリケーションやシステムを近代化するパターンを扱います。現在検証済みなのは、`DocIntake` という 1 つの自作コンソールアプリを .NET Framework 4.8 / Windows / SMB から .NET 10 / Linux / NFS、さらに .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points へモダナイズする記録です。広いスコープはプロジェクトの境界であり、すべてのランタイムやトポロジーの検証済みサポートを示しません。
 
 入力と出力の正本は FSx for ONTAP の `appdata` ボリュームに残し、アプリケーション側とプロトコル側を 1 段ずつ変えます。
 
@@ -55,7 +55,7 @@
 | 検証を自分の環境で再現する順序（前提、見積りと承認、段階 0 から 3、後片付け、再現できない範囲） | [再現手順](docs/ja/reproduce.md) |
 | 段階 0: SMB と NTFS の出発点 | [段階 0](docs/ja/stage-0-smb-ntfs.md) |
 | 段階 1: 同じボリュームへの NFS の追加 | [段階 1](docs/ja/stage-1-multiprotocol.md) |
-| 段階 2: Linux 上の新しい .NET への移行（AIMF のセッション記録を含む） | [段階 2](docs/ja/stage-2-aimf-modern-dotnet.md) |
+| 段階 2: Linux 上の新しい .NET へのモダナイゼーション（AIMF のセッション記録を含む） | [段階 2](docs/ja/stage-2-aimf-modern-dotnet.md) |
 | 段階 3: S3 Access Points による一部サーバーレス化 | [段階 3](docs/ja/stage-3-s3-access-points.md) |
 | 検証方法から得た教訓（対照のない計測は結果にならない、など） | [検証方法の教訓](docs/ja/verification-method-lessons.md) |
 | 検証環境の構成と費用の見積り | [検証環境](docs/ja/environment.md) |

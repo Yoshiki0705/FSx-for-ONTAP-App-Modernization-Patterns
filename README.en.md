@@ -55,7 +55,7 @@ The current record does not establish Windows .NET 10 verification, universal S3
 | Reproducing the verification in your own environment, in order (prerequisites, estimate and approval, stages 0 to 3, teardown, what cannot be reproduced) | [Reproduction guide](docs/en/reproduce.md) |
 | Stage 0: the SMB and NTFS starting point | [Stage 0](docs/en/stage-0-smb-ntfs.md) |
 | Stage 1: adding NFS to the same volume | [Stage 1](docs/en/stage-1-multiprotocol.md) |
-| Stage 2: migrating to modern .NET on Linux (includes the AIMF session record) | [Stage 2](docs/en/stage-2-aimf-modern-dotnet.md) |
+| Stage 2: modernizing to .NET on Linux (includes the AIMF session record) | [Stage 2](docs/en/stage-2-aimf-modern-dotnet.md) |
 | Stage 3: partial serverless via S3 Access Points | [Stage 3](docs/en/stage-3-s3-access-points.md) |
 | Lessons from the verification method (a measurement without a positive control is not a result, and others) | [Verification method lessons](docs/en/verification-method-lessons.md) |
 | Environment structure and cost estimates | [Verification environment](docs/en/environment.md) |
