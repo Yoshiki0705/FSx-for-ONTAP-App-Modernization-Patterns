@@ -67,6 +67,10 @@ mvn -DskipTests package
 java -jar target/candidate-b-java-spring-background-nfs-1.0.0.jar
 ```
 
-Evidence tier: Tier 1 (local/unit) establishes local algorithmic behavior only. NFS, cross-host,
-Spring-lifecycle-on-host, and ONTAP behavior are `open`/`not-measured` until a candidate-specific
-real-environment run (Tier 2/3) is recorded in the private Candidate B ledger.
+Evidence tier: Tier 1 (local/unit) establishes local algorithmic behavior only. The
+candidate-specific real-environment run (Tier 2/3) is complete and `verified` for this candidate on
+its recorded environment only (ap-northeast-1, ONTAP 9.18.1, NFS v4.1, Amazon Linux 2023 arm64,
+Amazon Corretto 21, Spring Boot 4.1.2): 5 cases PASS, 1 SKIPPED (wait/retry, out of the first
+slice). The cross-process `lock_contention` (a `null` FileLock) was confirmed with two JVMs on the
+NFS mount. Not a general compatibility statement and no .NET evidence reused. Per-run identifiers
+and raw artifacts are in the private Candidate B ledger, not here.

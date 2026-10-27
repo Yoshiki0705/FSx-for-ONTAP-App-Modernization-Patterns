@@ -75,8 +75,17 @@ Handler: `docintake_crest.handler.handle`. Environment: `ONTAP_HOST` (e.g. `http
 Managed event: `{"mode":"managed_lambda_ontap_rest","op":"read","volume_uuid":"...","path":"...",
 "length":1024,"scenario_id":"..."}`.
 
-Evidence tier: Tier 1 (local/unit) establishes the classification and parser logic only. Real ONTAP
-REST read/serve, the actual 401/403/404 responses, endpoint reachability, TLS trust, and any
-zero-call claim are `open`/`not-measured` until a candidate-specific real-environment run (Tier
-2/3) is recorded in the private ledger. `crest-zero-call-claim` stays `open/not-measured` by design
-unless both AWS-side and ONTAP-side audit scopes and the correlation controls are present.
+Evidence tier: Tier 1 (local/unit) establishes the classification and parser logic only. The
+candidate-specific real-environment run (Tier 2/3) is complete for this candidate on its recorded
+environment only (ap-northeast-1, ONTAP 9.18.1, the cluster management LIF REST endpoint,
+python3.14 Lambda in-VPC): the read and the four negatives (401 auth failure, 403 not authorized,
+timeout unreachable, 404 invalid identifier) are `verified`; two cases are SKIPPED (write mutation,
+oversize single call); one is `open/not-measured`. The `serve` case is `attested` — one tier below
+`verified`: the read leg is verified and the witness write is attested from source, but the
+independent witness read-back was not exported before teardown, a provenance gap (see the private
+ledger's run envelope). The run also found and fixed two handler defects (TLS-trust classification
+via unwrapping the SSLError from URLError.reason; a listing uses `Accept: application/json` because
+ONTAP REST answers 406 to `multipart/form-data` for a listing). Not a general compatibility
+statement and no .NET evidence reused. `crest-zero-call-claim` stays `open/not-measured` by design
+unless both AWS-side and ONTAP-side audit scopes and the correlation controls are present. Per-run
+identifiers and raw artifacts are in the private Candidate C-REST ledger, not here.
