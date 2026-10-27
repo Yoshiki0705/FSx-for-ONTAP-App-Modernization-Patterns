@@ -68,8 +68,11 @@ Handler: `docintake_c.handler.handle`. Event (managed): `{"mode":"managed_lambda
 Environment: `ARTIFACTS_BUCKET` (witness), optional `S3_ACCESS_POINT` default.
 
 Evidence tier: Tier 1 (local/unit with a fake S3) establishes the handler's dispatch and output
-shape only. Real FSx for ONTAP S3 Access Point behavior, policy-denial error classes, witness
-separation under real identities, and any zero-call claim are `open`/`not-measured` until a
-candidate-specific real-environment run (Tier 2/3) is recorded in the private Candidate C ledger.
-The `c-zero-call-claim` case stays `open/not-measured` by design unless both CloudTrail scopes and
-the correlation controls are present.
+shape only. The candidate-specific real-environment run (Tier 2/3) is complete and `verified` for
+this candidate on its recorded environment only (ap-northeast-1, ONTAP 9.18.1, an Internet-origin
+FSx for ONTAP S3 Access Point on an AD-non-joined UNIX SVM, python3.14 Lambda): 5 cases PASS
+(Get/Put/List, policy-condition denial with a before/after control, local invalid-parser-input),
+1 SKIPPED (file-locking), 1 `open/not-measured`. Object operations needed no AD-DC reachability.
+Not a general compatibility statement and no .NET evidence reused. The `c-zero-call-claim` case
+stays `open/not-measured` by design unless both CloudTrail scopes and the correlation controls are
+present. Per-run identifiers and raw artifacts are in the private Candidate C ledger, not here.
