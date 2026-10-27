@@ -123,9 +123,22 @@ def _handle_managed(event: dict) -> dict:
             postcondition="no_ontap_call",
         )
 
-    rest_path = f"/api/storage/volumes/{volume_uuid}/files/{file_path}?length={length}"
+    # A directory/property read lists the files resource as JSON. A file bytes read uses
+    # Accept: multipart/form-data with a length (ONTAP documents multipart only for byte reads;
+    # it answers 406 "MIME type multipart/form-data is not supported" for a listing).
+    read_kind = event.get("read_kind") or ("listing" if not file_path else "bytes")
+    if read_kind == "listing":
+        rest_path = f"/api/storage/volumes/{volume_uuid}/files/{file_path}"
+        accept = "application/json"
+        ok_postcondition = "listing_returned"
+    else:
+        rest_path = (
+            f"/api/storage/volumes/{volume_uuid}/files/{file_path}?length={length}"
+        )
+        accept = "multipart/form-data"
+        ok_postcondition = "bytes_served"
     try:
-        resp = _ontap_get(rest_path, user, password, accept="multipart/form-data")
+        resp = _ontap_get(rest_path, user, password, accept=accept)
         body = resp.read()
         record = _record(
             scenario_id,
@@ -134,7 +147,8 @@ def _handle_managed(event: dict) -> dict:
             http_status=resp.status,
             output_hash=_sha256_hex(body),
             length=len(body),
-            postcondition="bytes_served",
+            read_kind=read_kind,
+            postcondition=ok_postcondition,
         )
         _write_witness(record)
         return record
@@ -155,10 +169,12 @@ def _handle_managed(event: dict) -> dict:
         _write_witness(record)
         return record
     except (urllib.error.URLError, TimeoutError, ssl.SSLError, OSError) as exc:
-        # No HTTP status from ONTAP: connection timeout / no route / TLS failure.
-        classification = (
-            UNREACHABLE if not isinstance(exc, ssl.SSLError) else "ontap_tls_untrusted"
-        )
+        # No HTTP status from ONTAP. A TLS trust failure (self-signed/untrusted cert) is distinct
+        # from a connection timeout / no route. urllib wraps the SSLError in URLError.reason, so
+        # unwrap it before classifying; otherwise a cert failure is misread as "unreachable".
+        reason = getattr(exc, "reason", None)
+        is_tls = isinstance(exc, ssl.SSLError) or isinstance(reason, ssl.SSLError)
+        classification = "ontap_tls_untrusted" if is_tls else UNREACHABLE
         record = _record(
             scenario_id,
             op,

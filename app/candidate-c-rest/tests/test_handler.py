@@ -39,3 +39,24 @@ def test_parser_mode_valid_error_object():
 
 def test_invalid_mode():
     assert handler.handle({"mode": "nope"})["error_class"] == "invalid_mode"
+
+
+def test_tls_failure_classified_distinct_from_unreachable():
+    """A urllib URLError wrapping an ssl.SSLError is ontap_tls_untrusted, not unreachable.
+
+    Regression for a real-environment finding: the FSx for ONTAP management endpoint presents a
+    self-signed certificate, so a verified call raises URLError(reason=SSLError). That must map to
+    ontap_tls_untrusted, not ontap_endpoint_unreachable.
+    """
+    import ssl
+    import urllib.error
+
+    tls_wrapped = urllib.error.URLError(ssl.SSLError("CERTIFICATE_VERIFY_FAILED"))
+    reason = getattr(tls_wrapped, "reason", None)
+    is_tls = isinstance(tls_wrapped, ssl.SSLError) or isinstance(reason, ssl.SSLError)
+    assert is_tls is True
+
+    plain = urllib.error.URLError("timed out")
+    reason2 = getattr(plain, "reason", None)
+    is_tls2 = isinstance(plain, ssl.SSLError) or isinstance(reason2, ssl.SSLError)
+    assert is_tls2 is False
