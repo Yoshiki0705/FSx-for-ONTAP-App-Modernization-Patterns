@@ -2,4 +2,4 @@
 # The handler uses only the standard library (urllib, ssl, base64, json, hashlib) plus boto3, which
 # the Lambda runtime provides. boto3 is pinned here for local imports; pytest runs the unit tests.
 boto3==1.43.119
-pytest==9.1.1
+pytest==9.2.0
