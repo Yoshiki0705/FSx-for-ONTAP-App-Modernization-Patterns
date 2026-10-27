@@ -118,7 +118,14 @@ namespace DocIntake.BackgroundWorker.Tests
                 var ownerProcessor = new CancellationAfterWriteProcessor(store, store.WriteCompleted);
                 var successorProcessor = new CancellationAfterWriteProcessor(store, new TaskCompletionSource<bool>());
                 var ownerOptions = TestFactory.Options(temp.Path, controlPath, "owner-a");
-                ownerOptions.ClaimLease = TimeSpan.FromMilliseconds(500);
+                // The claim lease is widened from 500 ms so the owner's renew loop (PollInterval
+                // 1 ms) has room to renew several times before the post-lease assertion, and the
+                // lease-expiry / successor-takeover window is wide enough that CI scheduling jitter
+                // does not reorder them. At 500 ms this test was flaky: under load the renew could
+                // miss its window, or the owner and successor raced on the claim file
+                // (SafeFileHandle.Open). The renew assertion below waits ClaimLease + 250 ms, so it
+                // scales with this value automatically.
+                ownerOptions.ClaimLease = TimeSpan.FromMilliseconds(2000);
                 ownerOptions.PollInterval = TimeSpan.FromMilliseconds(1);
                 var successorOptions = TestFactory.Options(temp.Path, controlPath, "owner-b");
                 successorOptions.ClaimLease = ownerOptions.ClaimLease;
