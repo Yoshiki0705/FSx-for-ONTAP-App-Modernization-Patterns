@@ -1,0 +1,30 @@
+[Unit]
+Description=DocIntake Background Worker (Candidate A, .NET 10 BackgroundService, NFS)
+# The worker reads and writes under the NFS mount. RequiresMountsFor makes systemd order this unit
+# after the mount and stop it if the mount goes away, so the worker never runs against an absent root.
+RequiresMountsFor=/mnt/appdata
+After=remote-fs.target
+Wants=remote-fs.target
+
+[Service]
+# Type=simple, not Type=notify. This worker is a plain .NET generic host (Program.Main ->
+# Host...RunAsync); it does not reference Microsoft.Extensions.Hosting.Systemd and does not call
+# UseSystemd(), so it never sends the sd_notify READY signal. Under Type=notify, `systemctl start`
+# blocks until the unit start-timeout because the readiness it waits for never arrives. Use
+# Type=simple unless you add the systemd hosting integration to the worker.
+Type=simple
+# All DOCINTAKE_* settings live in the env file; see docintake-bgworker.env.example.
+EnvironmentFile=/etc/docintake-bgworker.env
+# DOTNET_ROOT must point at the .NET 10 install; ExecStart invokes that dotnet on the worker DLL.
+ExecStart=/opt/dotnet/dotnet /opt/docintake/DocIntake.BackgroundWorker.dll
+# The worker stops on SIGTERM: the generic host cancels the loop and records a normal stop to the
+# control plane. Give it room to finish an in-flight item and release its claim before SIGKILL.
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+# Run as an unprivileged service account that can read and write the NFS mount, not root.
+User=docintake
+Group=docintake
+
+[Install]
+WantedBy=multi-user.target

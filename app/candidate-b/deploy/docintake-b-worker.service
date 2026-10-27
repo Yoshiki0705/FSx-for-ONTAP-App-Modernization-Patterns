@@ -1,0 +1,23 @@
+[Unit]
+Description=DocIntake Candidate B Worker (Java/Spring background, NFS)
+# The worker reads and writes under the NFS mount. RequiresMountsFor orders this unit after the
+# mount and stops it if the mount goes away, so the worker never runs against an absent root.
+RequiresMountsFor=/mnt/appdata
+After=remote-fs.target
+Wants=remote-fs.target
+
+[Service]
+# Type=oneshot: the Candidate B runner is bounded by DOCINTAKE_MAX_ITEMS and runs to completion,
+# then the Spring context closes and the process exits 0. A bounded run-to-completion is a oneshot,
+# not a long-lived daemon. (Like the .NET candidate, this Spring Boot app sends no sd_notify READY,
+# so Type=notify would block; a long-lived variant would use Type=simple.)
+Type=oneshot
+EnvironmentFile=/etc/docintake-b-worker.env
+# JAVA_HOME/bin/java runs the packaged Spring Boot jar.
+ExecStart=/usr/lib/jvm/java-21-amazon-corretto/bin/java -jar /opt/docintake-b/candidate-b-java-spring-background-nfs-1.0.0.jar
+# Run as an unprivileged service account that can read and write the NFS mount, not root.
+User=docintake
+Group=docintake
+
+[Install]
+WantedBy=multi-user.target

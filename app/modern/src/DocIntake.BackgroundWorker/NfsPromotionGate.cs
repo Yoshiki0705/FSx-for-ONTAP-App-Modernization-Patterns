@@ -54,6 +54,12 @@ namespace DocIntake.BackgroundWorker
             if (!string.Equals(input.Mode, "linux_ec2_nfs", StringComparison.Ordinal)) missing.Add("supported_mode");
             if (!string.Equals(input.CandidateId, CandidateId, StringComparison.Ordinal)) missing.Add("candidate_identity");
             if (string.IsNullOrWhiteSpace(input.RunId) || !input.RunId.StartsWith(RunPrefix, StringComparison.Ordinal)) missing.Add("run_identity");
+            // source_revision is a 64-hex SHA-256 content digest of the candidate source tree, NOT a
+            // 40-hex Git commit SHA-1. A commit id names a commit; it does not change when the working
+            // tree is edited without committing, so it cannot attest to the exact bytes that ran. The
+            // digest is derived from the per-file SHA-256 manifest of the source (see the Candidate A
+            // guide, docs/{ja,en}/candidate-a-background-nfs.md). The same Sha256 pattern validates the
+            // raw-artifact hashes below, so this field and those hashes share one 64-hex contract.
             if (string.IsNullOrWhiteSpace(input.SourceRevision) || !Sha256.IsMatch(input.SourceRevision)) missing.Add("source_revision");
             if (string.IsNullOrWhiteSpace(input.OntapVersion) || !Version.IsMatch(input.OntapVersion)) missing.Add("ontap_version");
             if (string.IsNullOrWhiteSpace(input.Region)) missing.Add("region");

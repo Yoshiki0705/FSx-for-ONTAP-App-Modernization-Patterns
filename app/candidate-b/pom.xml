@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      Candidate B: Java/Spring background processing on Linux over NFS.
+      Pinned versions (authoritative source + capture date 2026-10-26):
+        - Spring Boot 4.1.2  (Maven Central maven-metadata.xml for spring-boot-starter; 4.2.0 is RC only)
+        - Java release 21    (Amazon Corretto 21 LTS; Spring Boot 4.x requires Java 17+, 21 recommended)
+      Spring Boot 3.x reached OSS end of life in June 2026, so a 3.x line is not selected for new work.
+      First slice is non-Web background processing: no spring-boot-starter-web, no AWS SDK, no S3
+      Access Points dependency, no HTTP/UI/ECS/EKS/container path.
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.2</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.example.docintake</groupId>
+    <artifactId>candidate-b-java-spring-background-nfs</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>DocIntake Candidate B (Java/Spring background, NFS)</name>
+    <description>Java/Spring background worker for the DocIntake sample app over NFS on FSx for ONTAP.</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.release>21</maven.compiler.release>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

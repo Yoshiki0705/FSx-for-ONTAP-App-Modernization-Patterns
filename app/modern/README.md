@@ -14,6 +14,7 @@ history of its own. Stage guides: [stage 2 (ja)](../../docs/ja/stage-2-aimf-mode
 |---|---|
 | `src/DocIntake.Core` | `IFileStore` and its implementations: `SmbFileStore`, `NfsFileStore`, `S3FileStore`, plus `StorePaths` |
 | `src/DocIntake.Worker` | Console Worker. Reads documents through `IFileStore` and writes `index.json` |
+| `src/DocIntake.BackgroundWorker` | Candidate A: a separate .NET 10 `BackgroundService` for Linux/NFS/systemd. Deploy assets in [`deploy/`](deploy); guide: [candidate A (ja)](../../docs/ja/candidate-a-background-nfs.md), [candidate A (en)](../../docs/en/candidate-a-background-nfs.md) |
 | `src/DocIntake.Probe` | Console Probe. Emits `appmod-probe/1` JSON records for the five measured behaviors (`--store s3` selects the S3 path) |
 | `src/DocIntake.Lambda` | Stage-3 Lambda handler. Packaging steps are in [`BUILD.md`](src/DocIntake.Lambda/BUILD.md) |
 | `tests/DocIntake.Core.Tests` | xUnit tests for Core, Worker, Probe, and the Lambda handler |
