@@ -25,11 +25,17 @@ namespace DocIntake.BackgroundWorker.Tests
                 var claim = claims.TryClaim("item.txt", "owner", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1));
                 var completed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+                // The control-plane timeout is 10 ms. The operation delay must be far larger so the
+                // timeout always fires first, regardless of CI scheduling jitter. A 50 ms delay
+                // (5x the timeout) was flaky: under load the operation could complete before the
+                // 10 ms timeout was observed, so result.Status came back "succeeded" instead of
+                // "timeout". 2000 ms (200x) keeps the ordering deterministic. The test still waits
+                // for the operation to finish afterward (completed.Task) and records its completion.
                 var result = await service.ExecuteControlPlaneWithTimeoutAsync(
                     "item.txt",
                     token => Task.Run(async () =>
                     {
-                        await Task.Delay(50).ConfigureAwait(false);
+                        await Task.Delay(2000).ConfigureAwait(false);
                         completed.SetResult(true);
                     }),
                     CancellationToken.None);
