@@ -1,0 +1,6 @@
+.venv-crest/
+__pycache__/
+*.pyc
+build/
+dist/
+*.zip
