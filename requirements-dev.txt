@@ -1,7 +1,7 @@
 # Development toolchain, exact-pinned. Bump deliberately: change the version here,
 # run `make all`, fix what the new version finds, and commit both together.
 # The validators in tools/ and scripts/ are stdlib-only and are not listed here.
-ruff==0.17.2
+ruff==0.17.3
 cfn-lint==1.58.0
 # Not installable via pip; install separately:
 #   markdownlint-cli2   npm install -g markdownlint-cli2@0.22.1
