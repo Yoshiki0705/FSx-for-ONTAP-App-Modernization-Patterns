@@ -10,6 +10,35 @@
 
 このリポジトリの持続的なスコープは、データを FSx for ONTAP に残したまま、レガシーなアプリケーションやシステムを近代化するパターンです。パターンごとの requirements、design、実装、検証記録、エビデンス境界、関連資料へのナビゲーションを扱います。現在の `DocIntake` の記録はこの広いスコープの一例であり、別のランタイム、アプリケーション形、実行トポロジー、アクセスパスの互換性を示すものではありません。
 
+## レガシーなアプリケーションの例と置き換えの導線
+
+このリポジトリの検証対象は 1 つの `DocIntake` ですが、同じ考え方は、データをファイル共有に置いたまま実行環境を移したい多くのレガシーなアプリケーションに置き換えて読めます。下の表は、モダナイゼーションの対象になりやすいスタックの例です。自分のアプリケーションに近い行から、このリポジトリの検証内容（段階 0〜3 とコンテナ分岐）と、モダナイゼーションの手段（AIMF、AWS Transform）へたどってください。
+
+各リンクは外部の `documented` な例であり、このリポジトリの検証済みカバレッジを拡張しません。特定の製品やベンダーの優劣を示すものでもなく、読者が自分のスタックを識別するための入口です。
+
+| レガシーの例 | 典型的なモダナイゼーション | 参考リンク（外部） | このリポジトリでの対応する検証 |
+|---|---|---|---|
+| Java: Struts / JSP の Web アプリ | Spring MVC / Spring Boot へ再アーキテクチャ | [Struts から Spring MVC への再設計](https://learn.microsoft.com/ja-jp/azure/developer/java/migration/github-copilot-app-modernization-for-java-rearchitecture)、[移行先に Spring を選ぶ背景](https://www.stylez.co.jp/legacy_columns/struts_to_spring/why_spring_is_the_best_choice_for_migration_from_struts_framework/) | [段階 2（Linux の新しいランタイムへ）](docs/ja/stage-2-aimf-modern-dotnet.md) |
+| Java: J2EE / EJB / WebSphere / WebLogic のモノリス | サービス分解、コンテナ化 | [Java EE アプリのコンテナ化（AWS 指針）](https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-containerize-javaee/introduction.html)、[EJB モノリスの分解事例](https://bhavansh.hashnode.dev/decomposing-a-legacy-ejb-monolith-a-system-design-deep-dive) | [コンテナ分岐](docs/ja/branch-containerization.md) |
+| .NET Framework / ASP.NET のモノリス（Windows 依存） | .NET（Linux）へ、またはコンテナへ | [.NET Framework モノリスのモダナイゼーション経路](https://aws.amazon.com/jp/blogs/architecture/modernization-pathways-for-a-legacy-net-framework-monolithic-application-on-aws/)、[ASP.NET のコンテナ化](https://aws.amazon.com/jp/blogs/modernizing-with-aws/containerize-asp-net-application-using-aws-migration-hub-orchestrator/)、[.NET モダナイゼーションの指針](https://docs.aws.amazon.com/wellarchitected/latest/microsoft-workloads-lens/scenario-2-.net-application-modernization-on-aws.html) | [段階 0〜3 の記録](docs/ja/stage-0-smb-ntfs.md) |
+| COBOL / メインフレーム / 保守期限切れプラットフォーム | 再プラットフォーム、モノリス分解 | [レガシーシステムのモダナイゼーション](https://www.lastingdynamics.com/blog/legacy-system-modernization-guide/)、[レガシーコードの移行（IBM）](https://www.ibm.com/think/topics/legacy-code-migration) | [文書の索引](#文書の索引) |
+| ローカルファイルシステム / ファイル共有に依存するアプリ | コンテナ化し、共有ストレージを永続ボリュームに | [レガシーアプリのコンテナ化の勘所](https://oneuptime.com/blog/post/2026-02-12-containerize-legacy-applications-for-aws/view)、[コンテナは再起動で状態を失う（永続ストレージが要る）](https://kubernetes.io/docs/concepts/storage/volumes/)、[NAS を Kubernetes に繋ぐ 3 経路（NFS / SMB / iSCSI）](https://oneuptime.com/blog/post/2025-12-15-how-to-use-nas-storage-with-kubernetes/view) | [コンテナ分岐](docs/ja/branch-containerization.md) |
+
+ファイル共有に依存するレガシーなアプリケーションは、コンテナ化すると自身のファイルシステムの状態を再起動で失うため、永続ボリュームが要ります。このとき FSx for ONTAP を Kubernetes の永続ボリュームにすると、Pod の再スケジュール後もデータが追従します（[Kubernetes の永続ボリューム](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)）。この経路の構成とテンプレートは [コンテナ分岐](docs/ja/branch-containerization.md) と隣の Spoke にあります。
+
+モダナイゼーションの手段は、下の「関連する責務」にある AI Modernization Flow（AIMF）と AWS Transform です。どのレガシーの例でも、データを FSx for ONTAP に残したまま、アプリケーション側と到達プロトコルを 1 段ずつ変える、という本リポジトリの型に当てはめて読めます。
+
+### ブロックストレージ起点の検討（documented）
+
+上の例はファイルアクセス前提ですが、入口はファイル共有だけではありません。オンプレミスで FC / iSCSI のブロックストレージ上で動いているワークロード（データベース、SQL Server FCI など）も、FSx for ONTAP へ移すことでモダナイゼーションと最適化を検討できます。
+
+- モダナイゼーション（データ活用）: ブロックからファイルアクセスへ変えると、同じボリュームに対してマルチプロトコル（iSCSI / NFS / SMB / S3 Access Points）が成立します。S3 API のユーザーマッピングで S3 Access Points 経由のデータ活用（分析・AI 連携）へ広げられます。
+- 最適化（データ保護・可用性・疎結合）: アクセスパターンに応じた階層化（FabricPool）、Snapshot / SnapMirror / FlexClone によるデータ保護、Multi-AZ の iSCSI マルチパスによる高可用性、FlexClone による非破壊テストでの疎結合・可搬性を検討できます。
+
+これは `documented` な検討であり、本リポジトリで実機 verified にした経路ではありません（検証済みはファイル起点の `DocIntake` に限ります）。前提となる機能は、AWS Transform のストレージ Assessment が File & Block に対応し FSx for ONTAP を推奨すること（[ストレージの評価と移行](https://aws.amazon.com/jp/blogs/migration-and-modernization/assess-and-migrate-storage-to-the-cloud-with-aws-transform/)）、ブロックストレージ移行が EC2 と FSx for ONTAP をサポートすること（[AWS Transform の FSx for ONTAP サポート（プレビュー）](https://aws.amazon.com/jp/about-aws/whats-new/2026/06/aws-transform-vmware-fsx-for-ontap-preview/)）です。
+
+ブロックストレージ移行の手順、データ保護・不変性、分析・AI 活用の詳細は、それぞれの責務を持つ隣の Spoke にあります（下の「関連する責務」を参照）。本リポジトリはアプリケーション側の移行を扱い、ブロック移行の実装は置きません。
+
 ## 現在の検証済みカバレッジ
 
 現在の検証済みカバレッジは、1 つの `DocIntake` コンソールアプリと、その記録された実行経路に限ります。.NET Framework 4.8 / Windows / SMB を開始点とし、段階 2 では旧 Windows ビルドと近代化後の Linux ビルドを比較します。段階 2 は Windows .NET 10 の検証ではありません。段階 3 では .NET 10 managed-runtime Lambda と FSx for ONTAP S3 Access Points の経路を記録しています。次の表を、このリポジトリの唯一の完全な段階詳細表とします。
@@ -90,7 +119,7 @@ AWS へのデプロイは、構成・所要時間・費用の見積りを提示�
 
 旅程全体とリポジトリの関係図は Hub の旅程マップだけが持ちます。以下のリンクはナビゲーションと責務の所有範囲を示す `documented` なコンテキストであり、リンク先の記載はこの Spoke の検証済みカバレッジを拡張しません。AIMF はアプリケーション・モダナイゼーションのワークフロー境界です。この Spoke は、AIMF が扱わない FSx for ONTAP 側のストレージ、プロトコル、権限、エビデンス境界を補足します。
 
-[AI Modernization Flow](https://github.com/aws-samples/sample-ai-modernization-flow)（[紹介ブログ](https://aws.amazon.com/jp/blogs/news/aidm-introducing-ai-modernization-flow/)）は、AI エージェントに決められた段階でアプリケーションの移行を進めさせるワークフローです。AIMF が作る作業記録のリポジトリは公開しない作業領域に置き、公開するのは結果の抜粋だけです。2026-10-12 に実施したセッションの手順、ADR の要旨、ハーネスが機械的に止める範囲と止めない範囲は[段階 2](docs/ja/stage-2-aimf-modern-dotnet.md)にあります。
+[AI Modernization Flow](https://github.com/aws-samples/sample-ai-modernization-flow)（[日本語版ドキュメント（原本）](https://github.com/aws-samples/sample-ai-modernization-flow/tree/main/ja)、[紹介ブログ](https://aws.amazon.com/jp/blogs/news/aidm-introducing-ai-modernization-flow/)）は、AI エージェントに決められた段階でアプリケーションの移行を進めさせるワークフローです。Method（移行方法論）・Playbook（ドメイン固有の知見）・Harness（AI 実行規律）の 3 階層で、レガシーなアプリケーションのアセスメントから移行までを進めます。AIMF が作る作業記録のリポジトリは公開しない作業領域に置き、公開するのは結果の抜粋だけです。2026-10-12 に実施したセッションの手順、ADR の要旨、ハーネスが機械的に止める範囲と止めない範囲は[段階 2](docs/ja/stage-2-aimf-modern-dotnet.md)にあります。
 
 | 読みたいこと | 参照先 |
 |---|---|

@@ -10,6 +10,35 @@ The application input and output remain in the `appdata` volume on FSx for ONTAP
 
 The durable scope of this repository is patterns for modernizing legacy applications and systems while their data remains on FSx for ONTAP. It covers pattern-specific requirements, designs, implementations, verification records, evidence boundaries, and navigation. The current `DocIntake` record is one example within this broad scope. It is not a compatibility statement for another runtime, application shape, execution topology, or access path.
 
+## Legacy application examples and how to map them
+
+This repository verifies one `DocIntake`, but the same approach reads across many legacy applications that keep their data on a file share while moving the runtime. The table below lists stacks that are common modernization targets. Start from the row closest to your own application, then follow it to this repository's verification (stages 0–3 and the container branch) and to the modernization means (AIMF, AWS Transform).
+
+Each link is an external `documented` example; it does not expand this repository's verified coverage, and it does not assert any vendor or product superiority. It is an entry point to help you identify your own stack.
+
+| Legacy example | Typical modernization | Reference links (external) | Related verification here |
+|---|---|---|---|
+| Java: Struts / JSP web apps | Re-architect to Spring MVC / Spring Boot | [Struts to Spring MVC re-architecture](https://learn.microsoft.com/en-us/azure/developer/java/migration/github-copilot-app-modernization-for-java-rearchitecture), [why Spring is chosen as the target](https://www.stylez.co.jp/legacy_columns/struts_to_spring/why_spring_is_the_best_choice_for_migration_from_struts_framework/) | [Stage 2 (to a new runtime on Linux)](docs/en/stage-2-aimf-modern-dotnet.md) |
+| Java: J2EE / EJB / WebSphere / WebLogic monoliths | Service decomposition, containerization | [Containerizing Java EE apps (AWS guidance)](https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-containerize-javaee/introduction.html), [decomposing an EJB monolith](https://bhavansh.hashnode.dev/decomposing-a-legacy-ejb-monolith-a-system-design-deep-dive) | [Container branch](docs/en/branch-containerization.md) |
+| .NET Framework / ASP.NET monoliths (Windows-bound) | To .NET (Linux), or to containers | [Modernization pathways for a .NET Framework monolith](https://aws.amazon.com/blogs/architecture/modernization-pathways-for-a-legacy-net-framework-monolithic-application-on-aws/), [containerizing ASP.NET](https://aws.amazon.com/blogs/modernizing-with-aws/containerize-asp-net-application-using-aws-migration-hub-orchestrator/), [.NET modernization guidance](https://docs.aws.amazon.com/wellarchitected/latest/microsoft-workloads-lens/scenario-2-.net-application-modernization-on-aws.html) | [Stages 0–3 record](docs/en/stage-0-smb-ntfs.md) |
+| COBOL / mainframe / end-of-life platforms | Re-platform, monolith decomposition | [Legacy system modernization](https://www.lastingdynamics.com/blog/legacy-system-modernization-guide/), [legacy code migration (IBM)](https://www.ibm.com/think/topics/legacy-code-migration) | [Document index](#document-index) |
+| Apps that depend on a local filesystem / file share | Containerize, with shared storage as a persistent volume | [Containerizing legacy apps (what to watch for)](https://oneuptime.com/blog/post/2026-02-12-containerize-legacy-applications-for-aws/view), [containers lose state on restart (persistent storage is needed)](https://kubernetes.io/docs/concepts/storage/volumes/), [three ways to attach NAS to Kubernetes (NFS / SMB / iSCSI)](https://oneuptime.com/blog/post/2025-12-15-how-to-use-nas-storage-with-kubernetes/view) | [Container branch](docs/en/branch-containerization.md) |
+
+A legacy application that depends on a file share loses its own filesystem state on restart once containerized, so it needs a persistent volume. Using FSx for ONTAP as the Kubernetes persistent volume lets the data follow the pod across rescheduling ([Kubernetes persistent volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)). The configuration and templates for this path are in the [container branch](docs/en/branch-containerization.md) and the adjacent Spoke.
+
+The modernization means are AI Modernization Flow (AIMF) and AWS Transform, under "Related responsibilities" below. For any legacy example, you can read it through this repository's shape: keep the data on FSx for ONTAP, and change the application side and the access protocol one stage at a time.
+
+### Block-storage starting point (documented)
+
+The examples above assume file access, but the entry point is not only a file share. Workloads running on FC / iSCSI block storage on premises (databases, SQL Server FCI, and so on) can also be considered for modernization and optimization by moving them to FSx for ONTAP.
+
+- Modernization (data use): changing from block to file access makes multiprotocol access (iSCSI / NFS / SMB / S3 Access Points) available on the same volume. With S3 API user mapping, you can extend to data use (analytics, AI integration) through S3 Access Points.
+- Optimization (data protection, availability, loose coupling): you can consider access-pattern tiering (FabricPool), data protection with Snapshot / SnapMirror / FlexClone, high availability via Multi-AZ iSCSI multipath, and loose coupling / portability through non-disruptive testing with FlexClone.
+
+This is a `documented` consideration, not a path this repository verified in a real environment (the verified coverage is limited to the file-originated `DocIntake`). The enabling capabilities are that the AWS Transform storage assessment supports File & Block and recommends FSx for ONTAP ([assess and migrate storage](https://aws.amazon.com/blogs/migration-and-modernization/assess-and-migrate-storage-to-the-cloud-with-aws-transform/)), and that block storage migration supports EC2 and FSx for ONTAP ([AWS Transform FSx for ONTAP support (preview)](https://aws.amazon.com/about-aws/whats-new/2026/06/aws-transform-vmware-fsx-for-ontap-preview/)).
+
+The details of block storage migration, data protection and immutability, and analytics / AI use live in the adjacent Spokes that own those responsibilities (see "Related responsibilities" below). This repository covers the application side and does not host the block migration implementation.
+
 ## Current verified coverage
 
 Current verified coverage is limited to one `DocIntake` console application and its recorded execution paths. The source is .NET Framework 4.8 / Windows / SMB. Stage 2 compares the old Windows build with the modernized Linux build; it is not Windows .NET 10 verification. Stage 3 records the .NET 10 managed-runtime Lambda and FSx for ONTAP S3 Access Points path. The table below is the repository's only full stage-detail table.
@@ -90,7 +119,7 @@ Future patterns remain `open/not measured` until they are independently specifie
 
 Only the Hub journey map holds the overall journey and the diagram of how the repositories relate. The links below are `documented` navigation and ownership context; their content does not expand this Spoke's verified coverage. AIMF remains the application-modernization workflow boundary. This Spoke adds the FSx for ONTAP storage, protocol, permission, and evidence boundaries that AIMF does not cover.
 
-[AI Modernization Flow](https://github.com/aws-samples/sample-ai-modernization-flow) ([introductory blog post, Japanese](https://aws.amazon.com/jp/blogs/news/aidm-introducing-ai-modernization-flow/)) is a workflow that has an AI agent carry out an application migration through fixed phases. The working-record repository AIMF creates stays in an unpublished workspace; only excerpts of the results are published. The session run on 2026-10-12, the ADR summaries, and what the harness does and does not enforce mechanically are in [stage 2](docs/en/stage-2-aimf-modern-dotnet.md).
+[AI Modernization Flow](https://github.com/aws-samples/sample-ai-modernization-flow) ([Japanese documentation (source of truth)](https://github.com/aws-samples/sample-ai-modernization-flow/tree/main/ja), [introductory blog post, Japanese](https://aws.amazon.com/jp/blogs/news/aidm-introducing-ai-modernization-flow/)) is a workflow that has an AI agent carry out an application migration through fixed phases. It runs the assessment-to-migration flow for a legacy application across three layers: Method (the migration methodology), Playbook (domain-specific knowledge), and Harness (AI execution discipline). The working-record repository AIMF creates stays in an unpublished workspace; only excerpts of the results are published. The session run on 2026-10-12, the ADR summaries, and what the harness does and does not enforce mechanically are in [stage 2](docs/en/stage-2-aimf-modern-dotnet.md).
 
 | To read about | Go to |
 |---|---|
