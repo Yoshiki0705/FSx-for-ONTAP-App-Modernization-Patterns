@@ -47,7 +47,16 @@ worker retries only a `null` `tryLock`, up to that limit. If the limit passes, t
 `lock_contention`, and the control-plane record carries `attempts`, `waited_ms` and `wait_limit_ms`.
 A claim taken after a retry is recorded as `claim-acquired-after-wait`. `same_jvm_contention` and
 `platform_io_error` are never retried. Tier 1 covers the logic and a two-JVM case on a local
-directory; behavior on NFS and ONTAP is not measured yet (#74).
+directory.
+
+Measured once on two hosts over NFS v4.1 (ap-northeast-1, ONTAP 9.18.1P6, Amazon Linux 2023 arm64,
+Corretto 21; lease 30 s, grace 60 s on that SVM): a waiter took the claim 198 ms after the holder
+released it (retry interval 250 ms); a 10 s limit ended as `lock_contention` after 41 attempts; with no
+wait the outcome was `lock_contention` after one attempt; after `kill -9` of the holder JVM the
+waiter took the claim 162 ms later. After a forced stop of the holder's host the waiter took it about
+75 s after the stop request, a single observation that does not separate stop latency from lease
+expiry. This is not a statement about other ONTAP versions, Multi-AZ, NFS v3 or more than two hosts.
+The record is in the private ledger.
 
 **Java file-lock note (verified Tier 1):** a `null` result (`lock_contention`) is inherently a
 cross-process outcome. Within a single JVM the platform raises `OverlappingFileLockException`

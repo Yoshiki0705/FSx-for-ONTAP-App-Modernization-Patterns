@@ -19,5 +19,7 @@ public final class LockHolder {
         System.out.flush();
         Thread.sleep(holdMillis);
         claim.release();
+        System.out.println("RELEASED");
+        System.out.flush();
     }
 }
