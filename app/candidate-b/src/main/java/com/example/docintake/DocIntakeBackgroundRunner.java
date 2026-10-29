@@ -29,6 +29,7 @@ public class DocIntakeBackgroundRunner implements ApplicationRunner {
     private final BackgroundWorkerOptions options;
     private final FileLockClaimStore claims;
     private final ControlPlaneRecorder controlPlane;
+    private final ClaimWaiter waiter;
 
     public DocIntakeBackgroundRunner() {
         this.options = BackgroundWorkerOptions.fromEnvironment();
@@ -38,6 +39,9 @@ public class DocIntakeBackgroundRunner implements ApplicationRunner {
             throw new UncheckedIOException("failed to initialize claim store", ex);
         }
         this.controlPlane = new ControlPlaneRecorder(options.appDataRoot(), options.controlPlanePath());
+        this.waiter = options.claimWaitMillis() == 0
+            ? ClaimWaiter.noWait()
+            : new ClaimWaiter(options.claimWaitMillis(), options.claimRetryIntervalMillis(), ClaimWaiter.SYSTEM);
     }
 
     @Override
@@ -60,8 +64,10 @@ public class DocIntakeBackgroundRunner implements ApplicationRunner {
 
     private void processItem(String item) {
         FileLockClaimStore.Claim claim;
+        ClaimWaiter.Result waitResult;
         try {
-            claim = claims.tryClaim(item);
+            waitResult = waiter.claim(() -> claims.tryClaim(item));
+            claim = waitResult.claim();
         } catch (OverlappingFileLockException ex) {
             // Same-JVM overlap: an exact SAME_JVM_CONTENTION, not cross-process contention.
             LockOutcome outcome = LockOutcome.of(
@@ -81,8 +87,17 @@ public class DocIntakeBackgroundRunner implements ApplicationRunner {
             // tryLock returned null: LOCK_CONTENTION, never a silent retry.
             LockOutcome outcome = LockOutcome.of(LockClassification.LOCK_CONTENTION, "tryLock=null");
             controlPlane.record("claim-contention", item, outcome.classification().wireName(),
-                "claim_retained_by_other_process", outcome.rawOutcome());
+                "claim_retained_by_other_process;attempts=" + waitResult.attempts()
+                    + ";waited_ms=" + waitResult.waitedMillis()
+                    + ";wait_limit_ms=" + options.claimWaitMillis(),
+                outcome.rawOutcome());
             return;
+        }
+        if (waitResult.attempts() > 1) {
+            // The claim was taken only after at least one retry: record that explicitly.
+            controlPlane.record("claim-acquired-after-wait", item, null,
+                "attempts=" + waitResult.attempts() + ";waited_ms=" + waitResult.waitedMillis(),
+                "tryLock=null x" + (waitResult.attempts() - 1) + " then acquired");
         }
 
         boolean reportWritten = false;

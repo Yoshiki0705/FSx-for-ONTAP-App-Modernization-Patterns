@@ -15,9 +15,19 @@ public final class BackgroundWorkerOptions {
     private final String stage;
     private final String ownerId;
     private final int maxItems;
+    private final long claimWaitMillis;
+    private final long claimRetryIntervalMillis;
 
     public BackgroundWorkerOptions(Path appDataRoot, Path controlPlanePath, String stage,
                                    String ownerId, int maxItems) {
+        this(appDataRoot, controlPlanePath, stage, ownerId, maxItems, 0, 200);
+    }
+
+    public BackgroundWorkerOptions(Path appDataRoot, Path controlPlanePath, String stage,
+                                   String ownerId, int maxItems, long claimWaitMillis,
+                                   long claimRetryIntervalMillis) {
+        this.claimWaitMillis = claimWaitMillis;
+        this.claimRetryIntervalMillis = claimRetryIntervalMillis;
         this.appDataRoot = appDataRoot;
         this.controlPlanePath = controlPlanePath;
         this.stage = stage;
@@ -45,6 +55,15 @@ public final class BackgroundWorkerOptions {
         return maxItems;
     }
 
+    /** How long to keep retrying a claim held by another process; 0 means one attempt. */
+    public long claimWaitMillis() {
+        return claimWaitMillis;
+    }
+
+    public long claimRetryIntervalMillis() {
+        return claimRetryIntervalMillis;
+    }
+
     /**
      * Builds options from DOCINTAKE_* environment variables and validates them. The control-plane
      * path must be outside the appdata root, so a cleanup of the NFS side cannot erase the
@@ -64,7 +83,16 @@ public final class BackgroundWorkerOptions {
         if (maxItems < 1) {
             throw new IllegalStateException("DOCINTAKE_MAX_ITEMS must be >= 1");
         }
-        return new BackgroundWorkerOptions(root, controlPlane, stage, ownerId, maxItems);
+        long waitMillis = optionalLong("DOCINTAKE_CLAIM_WAIT_MS", 0);
+        long intervalMillis = optionalLong("DOCINTAKE_CLAIM_RETRY_INTERVAL_MS", 200);
+        if (waitMillis < 0) {
+            throw new IllegalStateException("DOCINTAKE_CLAIM_WAIT_MS must be >= 0");
+        }
+        if (intervalMillis < 1) {
+            throw new IllegalStateException("DOCINTAKE_CLAIM_RETRY_INTERVAL_MS must be >= 1");
+        }
+        return new BackgroundWorkerOptions(
+            root, controlPlane, stage, ownerId, maxItems, waitMillis, intervalMillis);
     }
 
     private static String required(String name) {
@@ -73,6 +101,18 @@ public final class BackgroundWorkerOptions {
             throw new IllegalStateException(name + " is required");
         }
         return value;
+    }
+
+    private static long optionalLong(String name, long defaultValue) {
+        String value = System.getenv(name);
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException ex) {
+            throw new IllegalStateException(name + " must be an integer", ex);
+        }
     }
 
     private static int requiredInt(String name) {
