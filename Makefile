@@ -23,6 +23,7 @@ CFN_LINT   := $(call tool,cfn-lint)
 RUFF_PINNED := $(shell sed -n 's/^ruff==//p' requirements-dev.txt)
 
 PY_PATHS   := tools scripts
+CAND_VENV  := .venv-candidates
 MD_GLOBS   := "**/*.md"
 AI_STYLE_PATHS := AGENTS.md README.md README.en.md docs/
 # Recursive on purpose: a one-level glob such as templates/*.yaml silently drops a
@@ -135,6 +136,19 @@ app-modern: ## app/modern のビルドと単体テスト（dotnet SDK 10 必須�
 	@dotnet --version | grep -q '^10\.' || { echo "error: dotnet SDK 10 is required, found $$(dotnet --version)"; exit 1; }
 	dotnet build app/modern/DocIntake.sln -c Release --nologo
 	dotnet test app/modern/DocIntake.sln -c Release --no-build --nologo
+.PHONY: app-candidate-b
+app-candidate-b: ## app/candidate-b の mvn test（JDK 21 必須。未導入・版違いは失敗）
+	$(call need,mvn,brew install maven)
+	@java -version 2>&1 | grep -Eq 'version "21\.' || { echo "error: a JDK 21 runtime is required for app/candidate-b (java -version must report 21.x)."; exit 1; }
+	mvn -B -q -f app/candidate-b/pom.xml test
+
+.PHONY: app-candidates-python
+app-candidates-python: ## app/candidate-c と candidate-c-rest の pytest（専用 venv に固定版を導入）
+	@test -x $(CAND_VENV)/bin/pip || { rm -rf $(CAND_VENV); python3 -m venv $(CAND_VENV); }
+	$(CAND_VENV)/bin/python -m pip install --quiet -r app/candidate-c/requirements-dev.txt -r app/candidate-c-rest/requirements-dev.txt
+	PYTHONPATH=app/candidate-c/src $(CAND_VENV)/bin/python -m pytest -q -p no:cacheprovider app/candidate-c/tests
+	PYTHONPATH=app/candidate-c-rest/src $(CAND_VENV)/bin/python -m pytest -q -p no:cacheprovider app/candidate-c-rest/tests
+
 .PHONY: links
 links: ## 内部リンクの解決
 	$(PYTHON) tools/check_links.py
@@ -204,7 +218,7 @@ inbound-probes-refresh: ## 兄弟リポジトリの公開契約を読み直し�
 	$(PYTHON) tools/check_inbound_probes.py --refresh
 
 .PHONY: ci
-ci: lint audit links drift inbound-probes app-modern test ## CI が呼ぶ集約ターゲット
+ci: lint audit links drift inbound-probes app-modern app-candidate-b app-candidates-python test ## CI が呼ぶ集約ターゲット
 
 .PHONY: all
 all: ci ## コミット前のゲート（ci と同じ）

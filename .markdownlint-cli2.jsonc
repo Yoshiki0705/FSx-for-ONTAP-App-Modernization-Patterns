@@ -46,6 +46,7 @@
   "globs": ["**/*.md"],
   "ignores": [
     "node_modules/**",
+    ".venv*/**", // installed packages, not repository content
     ".private/**", // gitleaks:allow - path pattern, not committed content
     ".kiro/**", // gitleaks:allow - path pattern, not committed content
     "semantic-review/**" // review-agent output; the findings live in .private/reviews/
