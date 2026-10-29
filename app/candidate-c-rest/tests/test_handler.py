@@ -7,6 +7,8 @@ They establish local algorithmic behavior only; the real ONTAP REST read/serve, 
 
 import json
 
+import pytest
+
 from docintake_crest import handler
 
 
@@ -16,6 +18,7 @@ def test_classify_http_maps_exact_classes():
     assert handler._classify_http(404, 4) == handler.INVALID_ID
     assert handler._classify_http(405, 4) == handler.INVALID_ID
     assert handler._classify_http(400, 2) == handler.INVALID_ID
+    assert handler._classify_http(413, None) == handler.TOO_LARGE
     assert handler._classify_http(500, None) == "ontap_rest_unexpected_status"
 
 
@@ -88,7 +91,9 @@ def test_payload_bytes_is_deterministic_and_exact():
     assert a != handler._payload_bytes({"generate_bytes": 2_500_000, "seed": "y"})
 
 
-def test_write_file_creates_then_chunks_below_the_one_megabyte_limit(monkeypatch):
+def test_write_file_posts_the_first_chunk_then_patches_below_the_one_megabyte_limit(
+    monkeypatch,
+):
     calls = []
 
     def fake_request(method, path, user, password, **kwargs):
@@ -98,13 +103,14 @@ def test_write_file_creates_then_chunks_below_the_one_megabyte_limit(monkeypatch
     monkeypatch.setattr(handler, "_ontap_request", fake_request)
     event = {"generate_bytes": 2_500_000}
     rec = handler._write_file("w", "write", "uuid", "big.bin", event, "u", "p")
-    assert [c[0] for c in calls] == ["POST", "PATCH", "PATCH", "PATCH"]
+    assert [c[0] for c in calls] == ["POST", "PATCH", "PATCH"]
+    assert "byte_offset" not in calls[0][1]
     assert [c[1].split("byte_offset=")[-1] for c in calls[1:]] == [
-        "0",
         "1000000",
         "2000000",
     ]
-    assert rec["ontap_calls"] == 4 and rec["written_length"] == 2_500_000
+    assert [c[2] > 1_000_000 for c in calls] == [True, True, False]
+    assert rec["ontap_calls"] == 3 and rec["written_length"] == 2_500_000
     assert rec["written_hash"] == handler._sha256_hex(handler._payload_bytes(event))
 
 
@@ -114,7 +120,9 @@ def test_read_all_issues_ranged_reads_and_hashes_the_whole_file(monkeypatch):
 
     def fake_get(path, user, password, accept=None, timeout=10):
         if accept == "application/json":
-            return _fake_response(json.dumps({"records": [{"size": len(data)}]}).encode())
+            return _fake_response(
+                json.dumps({"records": [{"size": len(data)}]}).encode()
+            )
         q = dict(p.split("=") for p in path.split("?")[1].split("&"))
         off, ln = int(q["byte_offset"]), int(q["length"])
         seen.append((off, ln))
@@ -126,3 +134,37 @@ def test_read_all_issues_ranged_reads_and_hashes_the_whole_file(monkeypatch):
     assert seen == [(0, 1_000_000), (1_000_000, 1_000_000), (2_000_000, 500_000)]
     assert rec["output_hash"] == handler._sha256_hex(data)
     assert rec["ontap_calls"] == 4 and rec["file_size"] == len(data)
+
+
+def test_bytes_read_hashes_the_data_not_the_multipart_envelope(monkeypatch):
+    data = b"x" * 1024
+    body, ctype = handler._multipart_body(data)
+    monkeypatch.setattr(handler, "_ontap_credential", lambda: ("u", "p"))
+    monkeypatch.setattr(
+        handler, "_ontap_get", lambda *a, **k: _fake_response(body, ctype)
+    )
+    rec = handler.handle(
+        {
+            "mode": handler.MANAGED_MODE,
+            "volume_uuid": "uuid",
+            "path": "f",
+            "read_kind": "bytes",
+            "length": 1024,
+        }
+    )
+    assert rec["length"] == 1024 and rec["response_length"] > 1024
+    assert rec["output_hash"] == handler._sha256_hex(data)
+
+
+def test_multipart_payload_ignores_bytes_read_entry_and_checks_it():
+    data = b"abc" * 100
+    body = (
+        b"--B\r\nContent-Disposition: form-data; name=bytes_read\r\n\r\n300\r\n"
+        b"--B\r\nContent-Type: application/octet-stream\r\nContent-Disposition: form-data\r\n\r\n"
+        + data
+        + b"\r\n--B--\r\n"
+    )
+    assert handler._multipart_payload("multipart/form-data; boundary=B", body) == data
+    bad = body.replace(b"\r\n\r\n300", b"\r\n\r\n299")
+    with pytest.raises(ValueError):
+        handler._multipart_payload("multipart/form-data; boundary=B", bad)

@@ -43,6 +43,7 @@ AUTH_FAILED = "ontap_rest_auth_failed"
 AUTHZ_DENIED = "ontap_rest_authorization_denied"
 UNREACHABLE = "ontap_endpoint_unreachable"
 INVALID_ID = "ontap_rest_invalid_identifier"
+TOO_LARGE = "ontap_rest_payload_too_large"
 
 
 def _sha256_hex(data: bytes) -> str:
@@ -110,14 +111,27 @@ def _ontap_get(
 
 
 def _multipart_payload(content_type: str, body: bytes) -> bytes:
-    """Return the data of the single form entry of a multipart/form-data response."""
+    """Return the file data of a multipart/form-data read response.
+
+    ONTAP 9.18.1 answers a read with two entries: ``bytes_read`` (the count, as text) and the
+    data. The count is cross-checked against the data length.
+    """
     msg = BytesParser(policy=default).parsebytes(
         b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + body
     )
     parts = list(msg.iter_parts())
-    if len(parts) != 1:
-        raise ValueError(f"expected one multipart entry, found {len(parts)}")
-    return parts[0].get_payload(decode=True)
+    counts = [
+        p
+        for p in parts
+        if p.get_param("name", header="content-disposition") == "bytes_read"
+    ]
+    data = [p for p in parts if p not in counts]
+    if len(data) != 1 or len(counts) > 1:
+        raise ValueError(f"expected one data entry, found {len(data)} of {len(parts)}")
+    payload = data[0].get_payload(decode=True)
+    if counts and int(counts[0].get_payload(decode=True)) != len(payload):
+        raise ValueError("bytes_read does not match the data length")
+    return payload
 
 
 def _multipart_body(data: bytes) -> tuple[bytes, str]:
@@ -199,6 +213,11 @@ def _handle_managed(event: dict) -> dict:
     try:
         resp = _ontap_get(rest_path, user, password, accept=accept)
         body = resp.read()
+        raw_length = len(body)
+        if read_kind != "listing":
+            # The hash and length describe the file data, not the multipart envelope around it
+            # (its boundary differs per response, so an envelope hash can never match the file).
+            body = _multipart_payload(resp.headers["Content-Type"], body)
         record = _record(
             scenario_id,
             op,
@@ -206,6 +225,7 @@ def _handle_managed(event: dict) -> dict:
             http_status=resp.status,
             output_hash=_sha256_hex(body),
             length=len(body),
+            response_length=raw_length,
             read_kind=read_kind,
             postcondition=ok_postcondition,
         )
@@ -290,22 +310,23 @@ def _payload_bytes(event: dict) -> bytes:
 
 
 def _write_file(scenario_id, op, volume_uuid, file_path, event, user, password) -> dict:
-    """Create the file, then write it in chunks of at most CHUNK_BYTES with PATCH."""
+    """Write the data in chunks of at most CHUNK_BYTES.
+
+    ONTAP creates a new file with a multipart/form-data POST that carries the first data; a JSON
+    POST only creates directories or sets metadata (the first real-environment attempt, a JSON POST
+    with type=file, got HTTP 405). Later chunks are written with PATCH at their byte offset.
+    """
     data = _payload_bytes(event)
     base = f"/api/storage/volumes/{volume_uuid}/files/{file_path}"
-    calls = 0
-    if event.get("create", True):
-        body = json.dumps({"type": "file", "unix_permissions": "644"}).encode()
-        _ontap_request(
-            "POST", base, user, password, body=body, content_type="application/json"
-        ).read()
-        calls += 1
     chunk = int(event.get("chunk_bytes", CHUNK_BYTES))
-    for offset in range(0, len(data), chunk):
+    create = event.get("create", True)
+    calls = 0
+    for offset in range(0, max(len(data), 1), chunk):
         part, ctype = _multipart_body(data[offset : offset + chunk])
+        first_create = create and offset == 0
         _ontap_request(
-            "PATCH",
-            f"{base}?byte_offset={offset}",
+            "POST" if first_create else "PATCH",
+            base if first_create else f"{base}?byte_offset={offset}",
             user,
             password,
             body=part,
@@ -328,8 +349,16 @@ def _write_file(scenario_id, op, volume_uuid, file_path, event, user, password) 
 def _read_all(scenario_id, op, volume_uuid, file_path, event, user, password) -> dict:
     """Read a whole file with several ranged reads, each at most CHUNK_BYTES."""
     base = f"/api/storage/volumes/{volume_uuid}/files/{file_path}"
+    # A file path answers a JSON listing with HTTP 400 "Not a directory", so the size comes from
+    # the parent directory listing filtered to the file name.
+    parent, _, name = file_path.rpartition("/")
     listing = json.loads(
-        _ontap_get(base, user, password, accept="application/json").read()
+        _ontap_get(
+            f"/api/storage/volumes/{volume_uuid}/files/{parent}?name={name}&fields=size",
+            user,
+            password,
+            accept="application/json",
+        ).read()
     )
     size = int(listing["records"][0]["size"])
     chunk = int(event.get("chunk_bytes", CHUNK_BYTES))
@@ -365,6 +394,8 @@ def _classify_http(http_status: int, ontap_code):
         return AUTH_FAILED
     if http_status == 403:
         return AUTHZ_DENIED
+    if http_status == 413:
+        return TOO_LARGE
     if http_status in (404, 405) or http_status == 400:
         return INVALID_ID
     return "ontap_rest_unexpected_status"
