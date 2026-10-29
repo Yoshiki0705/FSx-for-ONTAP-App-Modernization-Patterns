@@ -27,12 +27,16 @@ import os
 import ssl
 import urllib.error
 import urllib.request
+from email.parser import BytesParser
+from email.policy import default
 
 import boto3
 import botocore.exceptions
 
 MANAGED_MODE = "managed_lambda_ontap_rest"
 PARSER_MODE = "parser_unit_local"
+# ONTAP documents that a file read or write fails when the data exceeds 1 MB. Chunks stay below it.
+CHUNK_BYTES = 1_000_000
 
 # Negative classifications, fixed before execution.
 AUTH_FAILED = "ontap_rest_auth_failed"
@@ -77,17 +81,55 @@ def _ssl_context() -> ssl.SSLContext:
     return ssl.create_default_context()
 
 
-def _ontap_get(
-    path: str, user: str, password: str, accept: str | None = None, timeout: int = 10
+def _ontap_request(
+    method: str,
+    path: str,
+    user: str,
+    password: str,
+    accept: str | None = None,
+    body: bytes | None = None,
+    content_type: str | None = None,
+    timeout: int = 10,
 ):
     host = os.environ["ONTAP_HOST"]  # e.g. https://<ontap-management-ip>
     url = host.rstrip("/") + path
-    req = urllib.request.Request(url, method="GET")
+    req = urllib.request.Request(url, data=body, method=method)
     token = base64.b64encode(f"{user}:{password}".encode()).decode()
     req.add_header("Authorization", "Basic " + token)
     if accept:
         req.add_header("Accept", accept)
+    if content_type:
+        req.add_header("Content-Type", content_type)
     return urllib.request.urlopen(req, timeout=timeout, context=_ssl_context())
+
+
+def _ontap_get(
+    path: str, user: str, password: str, accept: str | None = None, timeout: int = 10
+):
+    return _ontap_request("GET", path, user, password, accept=accept, timeout=timeout)
+
+
+def _multipart_payload(content_type: str, body: bytes) -> bytes:
+    """Return the data of the single form entry of a multipart/form-data response."""
+    msg = BytesParser(policy=default).parsebytes(
+        b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + body
+    )
+    parts = list(msg.iter_parts())
+    if len(parts) != 1:
+        raise ValueError(f"expected one multipart entry, found {len(parts)}")
+    return parts[0].get_payload(decode=True)
+
+
+def _multipart_body(data: bytes) -> tuple[bytes, str]:
+    """Build a multipart/form-data body with exactly one entry, as the PATCH API requires."""
+    boundary = "docintakecrest" + _sha256_hex(data)[:16]
+    head = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="data"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    tail = f"\r\n--{boundary}--\r\n".encode()
+    return head + data + tail, f"multipart/form-data; boundary={boundary}"
 
 
 def handle(event: dict, context=None) -> dict:
@@ -121,6 +163,23 @@ def _handle_managed(event: dict) -> dict:
             status="error",
             error_class="aws_secret_retrieval_failed:" + type(exc).__name__,
             postcondition="no_ontap_call",
+        )
+
+    if op == "write":
+        return _guarded(
+            scenario_id,
+            op,
+            lambda: _write_file(
+                scenario_id, op, volume_uuid, file_path, event, user, password
+            ),
+        )
+    if event.get("read_kind") == "bytes_all":
+        return _guarded(
+            scenario_id,
+            op,
+            lambda: _read_all(
+                scenario_id, op, volume_uuid, file_path, event, user, password
+            ),
         )
 
     # A directory/property read lists the files resource as JSON. A file bytes read uses
@@ -185,6 +244,120 @@ def _handle_managed(event: dict) -> dict:
         )
         _write_witness(record)
         return record
+
+
+def _guarded(scenario_id, op, fn) -> dict:
+    """Run one operation; classify HTTP and transport failures the same way as a single read."""
+    try:
+        record = fn()
+        _write_witness(record)
+        return record
+    except urllib.error.HTTPError as exc:
+        err_body = exc.read()
+        ontap_code = _ontap_error_code(err_body)
+        record = _record(
+            scenario_id,
+            op,
+            status="error",
+            http_status=exc.code,
+            ontap_error_code=ontap_code,
+            error_class=_classify_http(exc.code, ontap_code),
+            postcondition="no_bytes_served" if op != "write" else "write_not_confirmed",
+            raw_error=err_body[:512].decode("utf-8", "replace"),
+        )
+    except (urllib.error.URLError, TimeoutError, ssl.SSLError, OSError) as exc:
+        reason = getattr(exc, "reason", None)
+        is_tls = isinstance(exc, ssl.SSLError) or isinstance(reason, ssl.SSLError)
+        record = _record(
+            scenario_id,
+            op,
+            status="error",
+            error_class="ontap_tls_untrusted" if is_tls else UNREACHABLE,
+            postcondition="no_bytes_served" if op != "write" else "write_not_confirmed",
+            raw_error=type(exc).__name__ + ":" + str(exc)[:256],
+        )
+    _write_witness(record)
+    return record
+
+
+def _payload_bytes(event: dict) -> bytes:
+    """Data to write: explicit base64, or a deterministic pattern of ``generate_bytes`` bytes."""
+    if "data_b64" in event:
+        return base64.b64decode(event["data_b64"])
+    count = int(event["generate_bytes"])
+    unit = hashlib.sha256(str(event.get("seed", "docintake")).encode()).digest()
+    return (unit * (count // len(unit) + 1))[:count]
+
+
+def _write_file(scenario_id, op, volume_uuid, file_path, event, user, password) -> dict:
+    """Create the file, then write it in chunks of at most CHUNK_BYTES with PATCH."""
+    data = _payload_bytes(event)
+    base = f"/api/storage/volumes/{volume_uuid}/files/{file_path}"
+    calls = 0
+    if event.get("create", True):
+        body = json.dumps({"type": "file", "unix_permissions": "644"}).encode()
+        _ontap_request(
+            "POST", base, user, password, body=body, content_type="application/json"
+        ).read()
+        calls += 1
+    chunk = int(event.get("chunk_bytes", CHUNK_BYTES))
+    for offset in range(0, len(data), chunk):
+        part, ctype = _multipart_body(data[offset : offset + chunk])
+        _ontap_request(
+            "PATCH",
+            f"{base}?byte_offset={offset}",
+            user,
+            password,
+            body=part,
+            content_type=ctype,
+            timeout=30,
+        ).read()
+        calls += 1
+    return _record(
+        scenario_id,
+        op,
+        status="ok",
+        written_length=len(data),
+        written_hash=_sha256_hex(data),
+        ontap_calls=calls,
+        chunk_bytes=chunk,
+        postcondition="write_issued_read_back_required",
+    )
+
+
+def _read_all(scenario_id, op, volume_uuid, file_path, event, user, password) -> dict:
+    """Read a whole file with several ranged reads, each at most CHUNK_BYTES."""
+    base = f"/api/storage/volumes/{volume_uuid}/files/{file_path}"
+    listing = json.loads(
+        _ontap_get(base, user, password, accept="application/json").read()
+    )
+    size = int(listing["records"][0]["size"])
+    chunk = int(event.get("chunk_bytes", CHUNK_BYTES))
+    data = b""
+    calls = 1
+    while len(data) < size:
+        resp = _ontap_get(
+            f"{base}?byte_offset={len(data)}&length={min(chunk, size - len(data))}",
+            user,
+            password,
+            accept="multipart/form-data",
+            timeout=30,
+        )
+        data += _multipart_payload(resp.headers["Content-Type"], resp.read())
+        calls += 1
+    return _record(
+        scenario_id,
+        op,
+        status="ok",
+        http_status=200,
+        output_hash=_sha256_hex(data),
+        length=len(data),
+        file_size=size,
+        ontap_calls=calls,
+        chunk_bytes=chunk,
+        read_kind="bytes_all",
+        postcondition="bytes_served",
+    )
 
 
 def _classify_http(http_status: int, ontap_code):

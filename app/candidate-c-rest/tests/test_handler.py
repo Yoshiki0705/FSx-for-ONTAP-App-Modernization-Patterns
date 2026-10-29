@@ -5,6 +5,8 @@ They establish local algorithmic behavior only; the real ONTAP REST read/serve, 
 401/403/404 responses, and endpoint reachability are Tier 2/3 real-environment concerns.
 """
 
+import json
+
 from docintake_crest import handler
 
 
@@ -60,3 +62,67 @@ def test_tls_failure_classified_distinct_from_unreachable():
     reason2 = getattr(plain, "reason", None)
     is_tls2 = isinstance(plain, ssl.SSLError) or isinstance(reason2, ssl.SSLError)
     assert is_tls2 is False
+
+
+def _fake_response(body: bytes, content_type: str = "application/json"):
+    class _Resp:
+        status = 200
+        headers = {"Content-Type": content_type}
+
+        def read(self):
+            return body
+
+    return _Resp()
+
+
+def test_multipart_roundtrip():
+    data = bytes(range(256)) * 4
+    body, ctype = handler._multipart_body(data)
+    assert handler._multipart_payload(ctype, body) == data
+
+
+def test_payload_bytes_is_deterministic_and_exact():
+    a = handler._payload_bytes({"generate_bytes": 2_500_000, "seed": "x"})
+    b = handler._payload_bytes({"generate_bytes": 2_500_000, "seed": "x"})
+    assert len(a) == 2_500_000 and a == b
+    assert a != handler._payload_bytes({"generate_bytes": 2_500_000, "seed": "y"})
+
+
+def test_write_file_creates_then_chunks_below_the_one_megabyte_limit(monkeypatch):
+    calls = []
+
+    def fake_request(method, path, user, password, **kwargs):
+        calls.append((method, path, len(kwargs.get("body") or b"")))
+        return _fake_response(b"{}")
+
+    monkeypatch.setattr(handler, "_ontap_request", fake_request)
+    event = {"generate_bytes": 2_500_000}
+    rec = handler._write_file("w", "write", "uuid", "big.bin", event, "u", "p")
+    assert [c[0] for c in calls] == ["POST", "PATCH", "PATCH", "PATCH"]
+    assert [c[1].split("byte_offset=")[-1] for c in calls[1:]] == [
+        "0",
+        "1000000",
+        "2000000",
+    ]
+    assert rec["ontap_calls"] == 4 and rec["written_length"] == 2_500_000
+    assert rec["written_hash"] == handler._sha256_hex(handler._payload_bytes(event))
+
+
+def test_read_all_issues_ranged_reads_and_hashes_the_whole_file(monkeypatch):
+    data = handler._payload_bytes({"generate_bytes": 2_500_000})
+    seen = []
+
+    def fake_get(path, user, password, accept=None, timeout=10):
+        if accept == "application/json":
+            return _fake_response(json.dumps({"records": [{"size": len(data)}]}).encode())
+        q = dict(p.split("=") for p in path.split("?")[1].split("&"))
+        off, ln = int(q["byte_offset"]), int(q["length"])
+        seen.append((off, ln))
+        body, ctype = handler._multipart_body(data[off : off + ln])
+        return _fake_response(body, ctype)
+
+    monkeypatch.setattr(handler, "_ontap_get", fake_get)
+    rec = handler._read_all("r", "read", "uuid", "big.bin", {}, "u", "p")
+    assert seen == [(0, 1_000_000), (1_000_000, 1_000_000), (2_000_000, 500_000)]
+    assert rec["output_hash"] == handler._sha256_hex(data)
+    assert rec["ontap_calls"] == 4 and rec["file_size"] == len(data)
