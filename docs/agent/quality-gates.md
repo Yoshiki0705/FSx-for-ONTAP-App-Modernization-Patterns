@@ -21,7 +21,9 @@ the same tree with the same tool versions. `make all` runs everything and is the
 | `drift` | `tools/check_make_targets.py` | Every `make` target named in code spans or code blocks of `AGENTS.md` and `CONTRIBUTING.md` has a rule in the Makefile; a missing file is skipped |
 | `inbound-probes` | `tools/check_inbound_probes.py` | Each string a sibling repository pins in this repository's files (listed in `docs/agent/inbound-probe-contract.txt`) occurs exactly once, in body text, in the file it is pinned to. Absent, quoted a second time, only in a heading, only in a code fence, and a missing file all fail |
 | `app-modern` | dotnet SDK 10 | `dotnet build` and `dotnet test` of `app/modern/DocIntake.sln` in Release; fails when the SDK is missing or is not version 10 |
-| `test` | unittest, `--selftest` | Detector tests, the irreversible-operation guard, and the audit's own rules |
+| `app-candidate-b` | Maven, JDK 21 | `mvn test` of `app/candidate-b`; fails when `mvn` is missing or `java -version` does not report 21.x |
+| `app-candidates-python` | python3 (venv `.venv-candidates`) | pytest of `app/candidate-c` and `app/candidate-c-rest` against the pins in their `requirements-dev.txt` (moto fakes S3 for C) |
+| `test` | unittest, `--selftest` | Detector tests, the irreversible-operation guard, and the audit's own rules; `check_test_coverage.py` also fails when an `app/candidate-*` directory holds tests that no `app-candidate*` target in `ci` runs |
 
 `make pr-verify PR=<number>` is the merge gate and is not part of `make all`, because it needs
 `gh` and a pushed pull request. It reads the PR's head SHA, lists the workflow runs for that SHA

@@ -29,3 +29,7 @@ __pycache__/
 venv/
 # Node
 node_modules/
+
+# Candidate build outputs
+.venv-candidates/
+target/
