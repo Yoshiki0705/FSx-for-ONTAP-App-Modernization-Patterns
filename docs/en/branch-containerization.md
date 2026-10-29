@@ -19,7 +19,7 @@ This link is `documented` navigation and ownership context for the adjacent Spok
 
 For containers, and for other workloads that use the same FSx for ONTAP, the owning Spokes publish their own records. None of them concerns `DocIntake`, and each link is pinned to a commit.
 
-- Persistent volumes on EKS with Trident: [Container-Datastore verification record](https://github.com/Yoshiki0705/FSx-for-ONTAP-Container-Datastore-Patterns/blob/8229330cb7acf1ff51c36238284a01646327e1e7/docs/en/atx-containerization-fsxn-storage-verification.md) (section 4.3)
+- Persistent volumes on EKS with Trident: [Container-Datastore verification record](https://github.com/Yoshiki0705/FSx-for-ONTAP-Container-Datastore-Patterns/blob/24b411dbec9d4f7136f688bde3120fa18c548e9c/docs/en/atx-containerization-fsxn-storage-verification.md) (section 4.3)
 - Parquet reads through Amazon Athena: [Lakehouse evidence record](https://github.com/Yoshiki0705/FSx-for-ONTAP-Lakehouse-Integrations/blob/a0d2cc1dd4a959c69eb2c1a12f144f585d4005cd/verification-pack/athena-parquet-read/evidence/2026-10-28/evidence-record.yaml)
 - Permission-aware RAG search: [Agentic RAG evaluation record](https://github.com/Yoshiki0705/FSx-for-ONTAP-Agentic-Access-Aware-RAG/blob/3dd74b5ddea63f05aef1790b8100dff4975abdfb/docs/en/evaluation.md) (section 3.3)
 
