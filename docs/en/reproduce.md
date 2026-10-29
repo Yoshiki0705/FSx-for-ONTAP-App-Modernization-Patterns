@@ -863,6 +863,16 @@ bash scripts/teardown.sh --apply --file-system-id fs-0123456789abcdef0 --linux-i
 - `make pr-verify` is the merge gate of this repository and is not needed for reproduction
 - Adding `APPMOD_DRY_RUN` together with `--apply` prints the calls with their real arguments in order, without calling AWS
 
+> **The FSx for ONTAP control-plane API lags the ONTAP state, so confirm absence the right way.**
+> The control plane (`aws fsx describe-volumes`) reflects volumes created or deleted through ONTAP
+> with a delay of minutes, so a residual check that reads only `aws fsx` can read "gone" right after
+> a delete when the volume is still present, or still list a volume after it is gone. `teardown.sh`
+> deletes by the IDs it captured and waits for the volume to leave the control plane before deleting
+> the SVM, because a `delete-storage-virtual-machine` is rejected while the control plane still lists
+> a non-root volume under it. Check the delete command's exit code before you start polling. When you
+> need certainty sooner than the control plane gives it, read the ONTAP REST API from inside the VPC
+> instead of `aws fsx` alone.
+
 ## What cannot be reproduced
 
 - The ONTAP version moves. The first build (2026-10-07) was 9.19.1P2 and the rebuild (2026-10-11) was 9.19.1P3. A newly created file system can have a different version.
