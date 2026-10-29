@@ -15,6 +15,16 @@
 
 このリンクは隣接 Spoke のナビゲーションと責務の所有範囲を示す `documented` なコンテキストです。リンク先の記載は、この Spoke の検証済み範囲を拡張しません。
 
+## 隣の Spoke の公開記録
+
+コンテナと、同じ FSx for ONTAP を使う別のワークロードについては、所有する Spoke が記録を公開しています。いずれも `DocIntake` ではなく、リンク先のコミットに固定しています。
+
+- EKS と Trident による永続ボリューム: [Container-Datastore の検証記録](https://github.com/Yoshiki0705/FSx-for-ONTAP-Container-Datastore-Patterns/blob/8229330cb7acf1ff51c36238284a01646327e1e7/docs/ja/atx-containerization-fsxn-storage-verification.md)（4.3 節）
+- Amazon Athena による Parquet 読み取り: [Lakehouse の証拠記録](https://github.com/Yoshiki0705/FSx-for-ONTAP-Lakehouse-Integrations/blob/a0d2cc1dd4a959c69eb2c1a12f144f585d4005cd/verification-pack/athena-parquet-read/evidence/2026-10-28/evidence-record.yaml)
+- 権限を引き継ぐ RAG 検索: [Agentic RAG の評価記録](https://github.com/Yoshiki0705/FSx-for-ONTAP-Agentic-Access-Aware-RAG/blob/3dd74b5ddea63f05aef1790b8100dff4975abdfb/docs/evaluation.md)（3.3 節）
+
+これらは `documented` なコンテキストです。この Spoke の検証済み範囲は変わらず、`DocIntake` のコンテナ化はここでも `open/not measured` です。
+
 ## 未検証の範囲
 
 Container-Datastore のコンテナ化は、この Spoke では `open/not measured` です。ECS、EKS、コンテナからの NFS / SMB / S3 Access Points、クラスタの実行、デプロイ、障害時の挙動は検証していません。

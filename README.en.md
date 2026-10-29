@@ -51,7 +51,7 @@ Each stage assumes the previous one, and volume data is never moved. The volume 
 | 1 | The same `DocIntake` as stage 0 | SMB plus NFS (multiprotocol) | Read and write the same `appdata` volume over NFS |
 | 2 | .NET 10 on Amazon EC2 (Linux) | NFS | Compare the old Windows build with the modernized Linux build. This is not Windows .NET 10 verification |
 | 3 | .NET 10 managed-runtime Lambda (`dotnet10`) | FSx for ONTAP S3 Access Points | Handle part of the processing through manual invocation. EventBridge Scheduler is disabled, and file locking is skipped in the current slice |
-| Branch | Containers | NFS / SMB / S3 Access Points | A future navigation and ownership path. Container runtime behavior is `open/not measured`; see the adjacent Spoke for details |
+| Branch | Containers | NFS / SMB / S3 Access Points | A future navigation and ownership path. `DocIntake` container runtime is `open/not measured`. Adjacent Spokes publish records for containers and other workloads ([links](docs/en/branch-containerization.md)) |
 
 ## Evidence boundary
 
@@ -89,7 +89,7 @@ The current record does not establish Windows .NET 10 verification, universal S3
 | Lessons from the verification method (a measurement without a positive control is not a result, and others) | [Verification method lessons](docs/en/verification-method-lessons.md) |
 | Environment structure and cost estimates | [Verification environment](docs/en/environment.md) |
 | Sample application structure and the five behaviors | [Sample app](docs/en/sample-app.md) |
-| Container branch (not measured) | [Branch: containerization](docs/en/branch-containerization.md) |
+| Container branch (`DocIntake` not measured; links to adjacent Spoke records) | [Branch: containerization](docs/en/branch-containerization.md) |
 
 The Japanese documents under [docs/ja/](docs/ja/stage-0-smb-ntfs.md) are the reference; the English ones keep the same section structure.
 

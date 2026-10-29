@@ -51,7 +51,7 @@
 | 1 | 段階 0 と同じ `DocIntake` | SMB に加えて NFS（マルチプロトコル） | 同じ `appdata` ボリュームを NFS からも読み書きする |
 | 2 | .NET 10 on Amazon EC2（Linux） | NFS | 旧 Windows ビルドと近代化後の Linux ビルドを比較する。Windows .NET 10 の検証ではない |
 | 3 | .NET 10 managed-runtime Lambda（`dotnet10`） | FSx for ONTAP S3 Access Points | 手動 invocation で一部の処理を扱う。EventBridge Scheduler は無効化され、file-locking は現行スライスでスキップする |
-| 分岐 | コンテナ | NFS / SMB / S3 Access Points | 将来のナビゲーションと責務分担を示す分岐。コンテナ runtime は `open/not measured` で、詳細は隣の Spoke を参照する |
+| 分岐 | コンテナ | NFS / SMB / S3 Access Points | 将来のナビゲーションと責務分担を示す分岐。`DocIntake` のコンテナ runtime は `open/not measured`。コンテナと他ワークロードの記録は隣の Spoke が公開している（[リンク](docs/ja/branch-containerization.md)） |
 
 ## エビデンス境界
 
@@ -89,7 +89,7 @@
 | 検証方法から得た教訓（対照のない計測は結果にならない、など） | [検証方法の教訓](docs/ja/verification-method-lessons.md) |
 | 検証環境の構成と費用の見積り | [検証環境](docs/ja/environment.md) |
 | サンプルアプリケーションの構成と 5 つの挙動 | [サンプルアプリ](docs/ja/sample-app.md) |
-| コンテナ分岐（未計測） | [分岐: コンテナ化](docs/ja/branch-containerization.md) |
+| コンテナ分岐（`DocIntake` は未計測。隣の Spoke の記録へのリンクあり） | [分岐: コンテナ化](docs/ja/branch-containerization.md) |
 
 英語版は [docs/en/](docs/en/stage-0-smb-ntfs.md) にあり、節構造は日本語版と一致させています。
 
