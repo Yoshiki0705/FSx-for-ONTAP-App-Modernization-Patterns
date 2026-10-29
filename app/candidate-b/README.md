@@ -29,8 +29,9 @@ Candidate B ledger, not here.
 | `.../DocIntakeBackgroundRunner.java` | `ApplicationRunner`: scan inbox, claim, write report, release, record |
 | `.../FileLockClaimStore.java` | `java.nio.channels.FileLock` exclusive claim and platform-I/O classification |
 | `.../LockClassification.java`, `LockOutcome.java` | the frozen lock-outcome mapping |
+| `.../ClaimWaiter.java` | bounded, explicit wait for a claim held by another process; reports attempts and time waited |
 | `.../ControlPlaneRecorder.java` | JSONL control-plane records outside the appdata root |
-| `src/test/java/...LockClassificationTest.java` | Tier 1 (local/unit) lock-outcome tests |
+| `src/test/java/...LockClassificationTest.java`, `ClaimWaiterTest.java` | Tier 1 (local/unit) lock-outcome and wait tests; `ClaimWaiterTest` also uses a second JVM (`LockHolder`) on a local directory |
 
 ## Lock-outcome mapping (frozen)
 
@@ -40,6 +41,13 @@ Candidate B ledger, not here.
 | `tryLock` returns `null` | `lock_contention` (negative) |
 | `OverlappingFileLockException` | `same_jvm_contention` (negative) |
 | Platform I/O error | `platform_io_error` with operation/platform/message and the raw exception (negative) |
+
+**Wait and retry.** The mapping above is unchanged. With `DOCINTAKE_CLAIM_WAIT_MS` greater than 0 the
+worker retries only a `null` `tryLock`, up to that limit. If the limit passes, the outcome is still
+`lock_contention`, and the control-plane record carries `attempts`, `waited_ms` and `wait_limit_ms`.
+A claim taken after a retry is recorded as `claim-acquired-after-wait`. `same_jvm_contention` and
+`platform_io_error` are never retried. Tier 1 covers the logic and a two-JVM case on a local
+directory; behavior on NFS and ONTAP is not measured yet (#74).
 
 **Java file-lock note (verified Tier 1):** a `null` result (`lock_contention`) is inherently a
 cross-process outcome. Within a single JVM the platform raises `OverlappingFileLockException`
@@ -55,6 +63,8 @@ a two-process NFS runtime case, not a single-JVM unit case.
 | `DOCINTAKE_STAGE` | stage name for `out/<stage>/reports/` |
 | `DOCINTAKE_OWNER_ID` | owner id recorded with claims |
 | `DOCINTAKE_MAX_ITEMS` | bounded number of items to process in one run (>= 1) |
+| `DOCINTAKE_CLAIM_WAIT_MS` | optional, default 0. How long to keep retrying a claim held by another process. 0 keeps the single attempt |
+| `DOCINTAKE_CLAIM_RETRY_INTERVAL_MS` | optional, default 200 (>= 1). Pause between attempts |
 
 ## Build and test
 
