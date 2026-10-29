@@ -865,7 +865,10 @@ bash scripts/teardown.sh --apply --file-system-id fs-0123456789abcdef0 --linux-i
 
 > **The FSx for ONTAP control-plane API lags the ONTAP state, so confirm absence the right way.**
 > The control plane (`aws fsx describe-volumes`) reflects volumes created or deleted through ONTAP
-> with a delay of minutes, so a residual check that reads only `aws fsx` can read "gone" right after
+> with a delay of minutes to tens of minutes. In the path-D observations, a Trident-created volume
+> appeared in the control plane 11–26 minutes after creation and cleared 41–44 minutes after deletion
+> (both single observations, `field-observation`; a timing range for sizing a teardown timeout, not a
+> guarantee). So a residual check that reads only `aws fsx` can read "gone" right after
 > a delete when the volume is still present, or still list a volume after it is gone. `teardown.sh`
 > deletes by the IDs it captured and waits for the volume to leave the control plane before deleting
 > the SVM, because a `delete-storage-virtual-machine` is rejected while the control plane still lists
