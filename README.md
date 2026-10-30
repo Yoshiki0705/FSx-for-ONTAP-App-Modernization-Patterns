@@ -2,9 +2,19 @@
 
 **日本語** | [English](README.en.md)
 
-このリポジトリは、データを Amazon FSx for NetApp ONTAP に残したまま、レガシーなアプリケーションやシステムを近代化するパターンを扱います。現在検証済みなのは、`DocIntake` という 1 つの自作コンソールアプリを .NET Framework 4.8 / Windows / SMB から .NET 10 / Linux / NFS、さらに .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points へモダナイズする記録です。広いスコープはプロジェクトの境界であり、すべてのランタイムやトポロジーの検証済みサポートを示しません。
+このリポジトリは、データを Amazon FSx for NetApp ONTAP に残したまま、レガシーなアプリケーションやシステムを近代化するパターンを扱います。FSx for ONTAP は、NetApp の ONTAP を AWS のマネージドサービスとして使える共有ストレージで、1 つのボリュームに NFS・SMB・S3 Access Points から同時にアクセスできます。現在検証済みなのは、`DocIntake` という 1 つの自作コンソールアプリを .NET Framework 4.8 / Windows / SMB から .NET 10 / Linux / NFS、さらに .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points へモダナイズする記録です。広いスコープはプロジェクトの境界であり、すべてのランタイムやトポロジーの検証済みサポートを示しません。
 
 入力と出力の正本は FSx for ONTAP の `appdata` ボリュームに残し、アプリケーション側とプロトコル側を 1 段ずつ変えます。
+
+## はじめに読む順序
+
+このリポジトリが初めてなら、次の順で読んでください。
+
+1. **データを動かさずに成立する理由。** 上の導入と[リポジトリのスコープ](#リポジトリのスコープ)が考え方を説明します。データを 1 つの FSx for ONTAP ボリュームに残し、アプリケーション側と到達プロトコルを 1 段ずつ変えます。
+2. **自分のアプリケーションを見つける。** [レガシーなアプリケーションの例と置き換えの導線](#レガシーなアプリケーションの例と置き換えの導線)が、よくあるレガシースタック（Java、.NET、COBOL、ファイル共有依存のアプリ）をこのリポジトリの読み始めの入口に対応づけます。
+3. **実際に検証した範囲を確かめる。** [現在の検証済みカバレッジ](#現在の検証済みカバレッジ)と[エビデンス境界](#エビデンス境界)が、何を検証し何を検証していないかを明示します。ここに一般的な互換性の主張はありません。
+4. **段階を読む、または再現する。** [文書の索引](#文書の索引)が各段階の文書と[再現手順](docs/ja/reproduce.md)へのリンクを持ちます。
+5. **この Spoke の先のデータ活用の経路をたどる。** [関連する責務](#関連する責務)が、コンテナ・分析・権限を意識した RAG・さらなるサーバーレス処理の隣接リポジトリへリンクします。
 
 ## リポジトリのスコープ
 
@@ -21,7 +31,7 @@
 | Java: Struts / JSP の Web アプリ | Spring MVC / Spring Boot へ再アーキテクチャ | [Struts から Spring MVC への再設計](https://learn.microsoft.com/ja-jp/azure/developer/java/migration/github-copilot-app-modernization-for-java-rearchitecture)、[移行先に Spring を選ぶ背景](https://www.stylez.co.jp/legacy_columns/struts_to_spring/why_spring_is_the_best_choice_for_migration_from_struts_framework/) | [段階 2（Linux の新しいランタイムへ）](docs/ja/stage-2-aimf-modern-dotnet.md) |
 | Java: J2EE / EJB / WebSphere / WebLogic のモノリス | サービス分解、コンテナ化 | [Java EE アプリのコンテナ化（AWS 指針）](https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-containerize-javaee/introduction.html)、[EJB モノリスの分解事例](https://bhavansh.hashnode.dev/decomposing-a-legacy-ejb-monolith-a-system-design-deep-dive) | [コンテナ分岐](docs/ja/branch-containerization.md) |
 | .NET Framework / ASP.NET のモノリス（Windows 依存） | .NET（Linux）へ、またはコンテナへ | [.NET Framework モノリスのモダナイゼーション経路](https://aws.amazon.com/jp/blogs/architecture/modernization-pathways-for-a-legacy-net-framework-monolithic-application-on-aws/)、[ASP.NET のコンテナ化](https://aws.amazon.com/jp/blogs/modernizing-with-aws/containerize-asp-net-application-using-aws-migration-hub-orchestrator/)、[.NET モダナイゼーションの指針](https://docs.aws.amazon.com/wellarchitected/latest/microsoft-workloads-lens/scenario-2-.net-application-modernization-on-aws.html) | [段階 0〜3 の記録](docs/ja/stage-0-smb-ntfs.md) |
-| COBOL / メインフレーム / 保守期限切れプラットフォーム | 再プラットフォーム、モノリス分解 | [レガシーシステムのモダナイゼーション](https://www.lastingdynamics.com/blog/legacy-system-modernization-guide/)、[レガシーコードの移行（IBM）](https://www.ibm.com/think/topics/legacy-code-migration) | [文書の索引](#文書の索引) |
+| COBOL / メインフレーム / 保守期限切れプラットフォーム | 再プラットフォーム、モノリス分解 | [レガシーシステムのモダナイゼーション](https://www.lastingdynamics.com/blog/legacy-system-modernization-guide/)、[レガシーコードの移行（IBM）](https://www.ibm.com/think/topics/legacy-code-migration) | 本リポジトリでは未検証。[モダナイゼーション旅程マップ](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/ja/reference/modernization-journey-map.md)（Hub）を参照 |
 | ローカルファイルシステム / ファイル共有に依存するアプリ | コンテナ化し、共有ストレージを永続ボリュームに | [レガシーアプリのコンテナ化の勘所](https://oneuptime.com/blog/post/2026-02-12-containerize-legacy-applications-for-aws/view)、[コンテナは再起動で状態を失う（永続ストレージが要る）](https://kubernetes.io/docs/concepts/storage/volumes/)、[NAS を Kubernetes に繋ぐ 3 経路（NFS / SMB / iSCSI）](https://oneuptime.com/blog/post/2025-12-15-how-to-use-nas-storage-with-kubernetes/view) | [コンテナ分岐](docs/ja/branch-containerization.md) |
 
 ファイル共有に依存するレガシーなアプリケーションは、コンテナ化すると自身のファイルシステムの状態を再起動で失うため、永続ボリュームが要ります。このとき FSx for ONTAP を Kubernetes の永続ボリュームにすると、Pod の再スケジュール後もデータが追従します（[Kubernetes の永続ボリューム](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)）。この経路の構成とテンプレートは [コンテナ分岐](docs/ja/branch-containerization.md) と隣の Spoke にあります。
@@ -86,6 +96,7 @@
 | 段階 1: 同じボリュームへの NFS の追加 | [段階 1](docs/ja/stage-1-multiprotocol.md) |
 | 段階 2: Linux 上の新しい .NET へのモダナイゼーション（AIMF のセッション記録を含む） | [段階 2](docs/ja/stage-2-aimf-modern-dotnet.md) |
 | 段階 3: S3 Access Points による一部サーバーレス化 | [段階 3](docs/ja/stage-3-s3-access-points.md) |
+| Candidate A: .NET 10 `BackgroundService` を Linux/NFS 上で systemd サービスとして動かす | [Candidate A](docs/ja/candidate-a-background-nfs.md) |
 | 検証方法から得た教訓（対照のない計測は結果にならない、など） | [検証方法の教訓](docs/ja/verification-method-lessons.md) |
 | 検証環境の構成と費用の見積り | [検証環境](docs/ja/environment.md) |
 | サンプルアプリケーションの構成と 5 つの挙動 | [サンプルアプリ](docs/ja/sample-app.md) |
@@ -127,6 +138,8 @@ AWS へのデプロイは、構成・所要時間・費用の見積りを提示�
 | AWS Transform でデータとサーバーを移す手順 | [AWS Transform による移行手順](https://github.com/Yoshiki0705/VMware-Migration-EC2-ONTAP/blob/main/docs/ja/aws-transform-migration-procedure.md) |
 | 分岐: コンテナ化と FSx for ONTAP の連携 | [コンテナ化への派生と FSx for ONTAP の連携可否](https://github.com/Yoshiki0705/FSx-for-ONTAP-Container-Datastore-Patterns/blob/main/docs/ja/atx-containerization-fsxn-derivation.md) |
 | 段階 3 の先: S3 Access Points による処理パターン | [FSx-for-ONTAP-S3AccessPoints-Serverless-Patterns](https://github.com/Yoshiki0705/FSx-for-ONTAP-S3AccessPoints-Serverless-Patterns/blob/main/README.md) |
+| 分析: Amazon Athena による Parquet 読み取り | [FSx-for-ONTAP-Lakehouse-Integrations](https://github.com/Yoshiki0705/FSx-for-ONTAP-Lakehouse-Integrations/blob/main/README.md) |
+| 同じデータに対する権限を意識した RAG 検索 | [FSx-for-ONTAP-Agentic-Access-Aware-RAG](https://github.com/Yoshiki0705/FSx-for-ONTAP-Agentic-Access-Aware-RAG/blob/main/README.md) |
 
 ## 品質ゲート
 

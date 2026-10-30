@@ -2,9 +2,19 @@
 
 [日本語](README.md) | **English**
 
-This repository covers patterns for modernizing legacy applications and systems while their data remains on Amazon FSx for NetApp ONTAP. The current verified slice is one purpose-built `DocIntake` console application recorded from .NET Framework 4.8 / Windows / SMB to .NET 10 / Linux / NFS, and then to .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points. The broad scope is a project boundary, not verified support for every runtime or topology.
+This repository covers patterns for modernizing legacy applications and systems while their data remains on Amazon FSx for NetApp ONTAP: a shared storage service that runs NetApp ONTAP as an AWS managed service, so one volume is reachable over NFS, SMB, and S3 Access Points at the same time. The current verified slice is one purpose-built `DocIntake` console application recorded from .NET Framework 4.8 / Windows / SMB to .NET 10 / Linux / NFS, and then to .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points. The broad scope is a project boundary, not verified support for every runtime or topology.
 
 The application input and output remain in the `appdata` volume on FSx for ONTAP; the application side and the protocol side change one stage at a time.
+
+## Start here
+
+New to this repository? Read in this order.
+
+1. **Why this works without moving data.** The intro above and [Repository scope](#repository-scope) explain the idea: keep the data on one FSx for ONTAP volume and change the application side and the access protocol one stage at a time.
+2. **Find your own application.** [Legacy application examples and how to map them](#legacy-application-examples-and-how-to-map-them) maps common legacy stacks (Java, .NET, COBOL, file-share-bound apps) to a reading entry point here.
+3. **See what was actually verified.** [Current verified coverage](#current-verified-coverage) and [Evidence boundary](#evidence-boundary) state exactly what was tested and what was not. Nothing here is a general compatibility claim.
+4. **Read a stage or reproduce it.** The [Document index](#document-index) links each stage document and the [Reproduction guide](docs/en/reproduce.md).
+5. **Follow a data-use path beyond this Spoke.** [Related responsibilities](#related-responsibilities) links the adjacent repositories for containers, analytics, permission-aware RAG, and more serverless processing.
 
 ## Repository scope
 
@@ -21,7 +31,7 @@ Each link is an external `documented` example; it does not expand this repositor
 | Java: Struts / JSP web apps | Re-architect to Spring MVC / Spring Boot | [Struts to Spring MVC re-architecture](https://learn.microsoft.com/en-us/azure/developer/java/migration/github-copilot-app-modernization-for-java-rearchitecture), [why Spring is chosen as the target](https://www.stylez.co.jp/legacy_columns/struts_to_spring/why_spring_is_the_best_choice_for_migration_from_struts_framework/) | [Stage 2 (to a new runtime on Linux)](docs/en/stage-2-aimf-modern-dotnet.md) |
 | Java: J2EE / EJB / WebSphere / WebLogic monoliths | Service decomposition, containerization | [Containerizing Java EE apps (AWS guidance)](https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-containerize-javaee/introduction.html), [decomposing an EJB monolith](https://bhavansh.hashnode.dev/decomposing-a-legacy-ejb-monolith-a-system-design-deep-dive) | [Container branch](docs/en/branch-containerization.md) |
 | .NET Framework / ASP.NET monoliths (Windows-bound) | To .NET (Linux), or to containers | [Modernization pathways for a .NET Framework monolith](https://aws.amazon.com/blogs/architecture/modernization-pathways-for-a-legacy-net-framework-monolithic-application-on-aws/), [containerizing ASP.NET](https://aws.amazon.com/blogs/modernizing-with-aws/containerize-asp-net-application-using-aws-migration-hub-orchestrator/), [.NET modernization guidance](https://docs.aws.amazon.com/wellarchitected/latest/microsoft-workloads-lens/scenario-2-.net-application-modernization-on-aws.html) | [Stages 0–3 record](docs/en/stage-0-smb-ntfs.md) |
-| COBOL / mainframe / end-of-life platforms | Re-platform, monolith decomposition | [Legacy system modernization](https://www.lastingdynamics.com/blog/legacy-system-modernization-guide/), [legacy code migration (IBM)](https://www.ibm.com/think/topics/legacy-code-migration) | [Document index](#document-index) |
+| COBOL / mainframe / end-of-life platforms | Re-platform, monolith decomposition | [Legacy system modernization](https://www.lastingdynamics.com/blog/legacy-system-modernization-guide/), [legacy code migration (IBM)](https://www.ibm.com/think/topics/legacy-code-migration) | Not verified here; see the [modernization journey map](https://github.com/Yoshiki0705/FSx-for-ONTAP-Adoption-Playbook/blob/main/docs/en/reference/modernization-journey-map.md) (Hub) |
 | Apps that depend on a local filesystem / file share | Containerize, with shared storage as a persistent volume | [Containerizing legacy apps (what to watch for)](https://oneuptime.com/blog/post/2026-02-12-containerize-legacy-applications-for-aws/view), [containers lose state on restart (persistent storage is needed)](https://kubernetes.io/docs/concepts/storage/volumes/), [three ways to attach NAS to Kubernetes (NFS / SMB / iSCSI)](https://oneuptime.com/blog/post/2025-12-15-how-to-use-nas-storage-with-kubernetes/view) | [Container branch](docs/en/branch-containerization.md) |
 
 A legacy application that depends on a file share loses its own filesystem state on restart once containerized, so it needs a persistent volume. Using FSx for ONTAP as the Kubernetes persistent volume lets the data follow the pod across rescheduling ([Kubernetes persistent volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)). The configuration and templates for this path are in the [container branch](docs/en/branch-containerization.md) and the adjacent Spoke.
@@ -86,6 +96,7 @@ The current record does not establish Windows .NET 10 verification, universal S3
 | Stage 1: adding NFS to the same volume | [Stage 1](docs/en/stage-1-multiprotocol.md) |
 | Stage 2: modernizing to .NET on Linux (includes the AIMF session record) | [Stage 2](docs/en/stage-2-aimf-modern-dotnet.md) |
 | Stage 3: partial serverless via S3 Access Points | [Stage 3](docs/en/stage-3-s3-access-points.md) |
+| Candidate A: running the .NET 10 `BackgroundService` on Linux/NFS as a systemd service | [Candidate A](docs/en/candidate-a-background-nfs.md) |
 | Lessons from the verification method (a measurement without a positive control is not a result, and others) | [Verification method lessons](docs/en/verification-method-lessons.md) |
 | Environment structure and cost estimates | [Verification environment](docs/en/environment.md) |
 | Sample application structure and the five behaviors | [Sample app](docs/en/sample-app.md) |
@@ -127,6 +138,8 @@ Only the Hub journey map holds the overall journey and the diagram of how the re
 | Moving data and servers with AWS Transform | [AWS Transform migration procedure](https://github.com/Yoshiki0705/VMware-Migration-EC2-ONTAP/blob/main/docs/en/aws-transform-migration-procedure.md) |
 | Branch: containerization with FSx for ONTAP | [Deriving containerization and FSx for ONTAP integration](https://github.com/Yoshiki0705/FSx-for-ONTAP-Container-Datastore-Patterns/blob/main/docs/en/atx-containerization-fsxn-derivation.md) |
 | Beyond stage 3: processing patterns with S3 Access Points | [FSx-for-ONTAP-S3AccessPoints-Serverless-Patterns](https://github.com/Yoshiki0705/FSx-for-ONTAP-S3AccessPoints-Serverless-Patterns/blob/main/README.en.md) |
+| Analytics: Parquet reads through Amazon Athena | [FSx-for-ONTAP-Lakehouse-Integrations](https://github.com/Yoshiki0705/FSx-for-ONTAP-Lakehouse-Integrations/blob/main/README.en.md) |
+| Permission-aware RAG search over the same data | [FSx-for-ONTAP-Agentic-Access-Aware-RAG](https://github.com/Yoshiki0705/FSx-for-ONTAP-Agentic-Access-Aware-RAG/blob/main/README.en.md) |
 
 ## Quality gates
 
