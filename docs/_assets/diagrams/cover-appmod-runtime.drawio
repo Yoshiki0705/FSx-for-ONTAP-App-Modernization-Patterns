@@ -61,7 +61,7 @@
         <mxCell id="e17" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;endFill=0;strokeColor=#232F3E;strokeWidth=1;fontSize=16;fontColor=#232F3E;labelBackgroundColor=#ffffff;entryX=0.6933333333333332;entryY=0.0;entryDx=0;entryDy=0;" edge="1" source="ce2" target="vol" parent="1">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="sec1" value="同じ仕事（実装案）：A / B / C / C-REST" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;fontStyle=1;fontColor=#ED7100;" vertex="1" parent="1">
+        <mxCell id="sec1" value="同じジョブ（実装案）：A / B / C / C-REST" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;fontStyle=1;fontColor=#ED7100;" vertex="1" parent="1">
           <mxGeometry x="322" y="140" width="464" height="24" as="geometry" />
         </mxCell>
         <mxCell id="sec2" value="別のワークロード" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;fontStyle=1;fontColor=#ED7100;" vertex="1" parent="1">
