@@ -2,7 +2,7 @@
 
 **日本語** | [English](README.en.md)
 
-このリポジトリは、データを Amazon FSx for NetApp ONTAP に残したまま、レガシーなアプリケーションやシステムを近代化するパターンを扱います。FSx for ONTAP は、NetApp の ONTAP を AWS のマネージドサービスとして使える共有ストレージで、1 つのボリュームに NFS・SMB・S3 Access Points から同時にアクセスできます。現在検証済みなのは、`DocIntake` という 1 つの自作コンソールアプリを .NET Framework 4.8 / Windows / SMB から .NET 10 / Linux / NFS、さらに .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points へモダナイズする記録です。広いスコープはプロジェクトの境界であり、すべてのランタイムやトポロジーの検証済みサポートを示しません。
+このリポジトリは、データを Amazon FSx for NetApp ONTAP に残したまま、レガシーなアプリケーションやシステムを近代化するパターンを扱います。FSx for ONTAP は、NetApp の ONTAP を AWS のマネージドサービスとして使える共有ストレージで、1 つのボリュームに NFS・SMB・S3 Access Points から同時にアクセスできます。実際に動かして確認したのは、`DocIntake` という 1 つの自作コンソールアプリを .NET Framework 4.8 / Windows / SMB から .NET 10 / Linux / NFS、さらに .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points へモダナイズする記録です。広いスコープはプロジェクトの境界であり、すべてのランタイムやトポロジーで動作を確認したわけではありません。
 
 入力と出力の正本は FSx for ONTAP の `appdata` ボリュームに残し、アプリケーション側とプロトコル側を 1 段ずつ変えます。
 
@@ -12,19 +12,19 @@
 
 1. **データを動かさずに成立する理由。** 上の導入と[リポジトリのスコープ](#リポジトリのスコープ)が考え方を説明します。データを 1 つの FSx for ONTAP ボリュームに残し、アプリケーション側と到達プロトコルを 1 段ずつ変えます。
 2. **自分のアプリケーションを見つける。** [レガシーなアプリケーションの例と置き換えの導線](#レガシーなアプリケーションの例と置き換えの導線)が、よくあるレガシースタック（Java、.NET、COBOL、ファイル共有依存のアプリ）をこのリポジトリの読み始めの入口に対応づけます。
-3. **実際に検証した範囲を確かめる。** [現在の検証済みカバレッジ](#現在の検証済みカバレッジ)と[エビデンス境界](#エビデンス境界)が、何を検証し何を検証していないかを明示します。ここに一般的な互換性の主張はありません。
+3. **実際に確認した範囲を確かめる。** [確認した範囲](#確認した範囲)と[エビデンス境界](#エビデンス境界)が、何を確認し何を確認していないかを明示します。ここに一般的な互換性の主張はありません。
 4. **段階を読む、または再現する。** [文書の索引](#文書の索引)が各段階の文書と[再現手順](docs/ja/reproduce.md)へのリンクを持ちます。
 5. **この Spoke の先のデータ活用の経路をたどる。** [関連する責務](#関連する責務)が、コンテナ・分析・権限を意識した RAG・さらなるサーバーレス処理の隣接リポジトリへリンクします。
 
 ## リポジトリのスコープ
 
-このリポジトリの持続的なスコープは、データを FSx for ONTAP に残したまま、レガシーなアプリケーションやシステムを近代化するパターンです。パターンごとの requirements、design、実装、検証記録、エビデンス境界、関連資料へのナビゲーションを扱います。現在の `DocIntake` の記録はこの広いスコープの一例であり、別のランタイム、アプリケーション形、実行トポロジー、アクセスパスの互換性を示すものではありません。
+このリポジトリの持続的なスコープは、データを FSx for ONTAP に残したまま、レガシーなアプリケーションやシステムを近代化するパターンです。パターンごとの要件、設計、実装、検証記録、確認した範囲の境界、関連資料へのナビゲーションを扱います。現在の `DocIntake` の記録はこの広いスコープの一例であり、別のランタイム、アプリケーション形、実行トポロジー、アクセスパスの互換性を示すものではありません。
 
 ## レガシーなアプリケーションの例と置き換えの導線
 
 このリポジトリの検証対象は 1 つの `DocIntake` ですが、同じ考え方は、データをファイル共有に置いたまま実行環境を移したい多くのレガシーなアプリケーションに置き換えて読めます。下の表は、モダナイゼーションの対象になりやすいスタックの例です。自分のアプリケーションに近い行から、このリポジトリの検証内容（段階 0〜3 とコンテナ分岐）と、モダナイゼーションの手段（AIMF、AWS Transform）へたどってください。
 
-各リンクは外部の `documented` な例であり、このリポジトリの検証済みカバレッジを拡張しません。特定の製品やベンダーの優劣を示すものでもなく、読者が自分のスタックを識別するための入口です。
+各リンクは外部の文書上の例で、このリポジトリで動作を確認した範囲を広げるものではありません。特定の製品やベンダーの優劣を示すものでもなく、読者が自分のスタックを識別するための入口です。
 
 | レガシーの例 | 典型的なモダナイゼーション | 参考リンク（外部） | このリポジトリでの対応する検証 |
 |---|---|---|---|
@@ -38,20 +38,20 @@
 
 モダナイゼーションの手段は、下の「関連する責務」にある AI Modernization Flow（AIMF）と AWS Transform です。どのレガシーの例でも、データを FSx for ONTAP に残したまま、アプリケーション側と到達プロトコルを 1 段ずつ変える、という本リポジトリの型に当てはめて読めます。
 
-### ブロックストレージ起点の検討（documented）
+### ブロックストレージ起点の検討（文書上の記載、実機では未確認）
 
 上の例はファイルアクセス前提ですが、入口はファイル共有だけではありません。オンプレミスで FC / iSCSI のブロックストレージ上で動いているワークロード（データベース、SQL Server FCI など）も、FSx for ONTAP へ移すことでモダナイゼーションと最適化を検討できます。
 
 - モダナイゼーション（データ活用）: ブロックからファイルアクセスへ変えると、同じボリュームに対してマルチプロトコル（iSCSI / NFS / SMB / S3 Access Points）が成立します。S3 API のユーザーマッピングで S3 Access Points 経由のデータ活用（分析・AI 連携）へ広げられます。
 - 最適化（データ保護・可用性・疎結合）: アクセスパターンに応じた階層化（FabricPool）、Snapshot / SnapMirror / FlexClone によるデータ保護、Multi-AZ の iSCSI マルチパスによる高可用性、FlexClone による非破壊テストでの疎結合・可搬性を検討できます。
 
-これは `documented` な検討であり、本リポジトリで実機 verified にした経路ではありません（検証済みはファイル起点の `DocIntake` に限ります）。前提となる機能は、AWS Transform のストレージ Assessment が File & Block に対応し FSx for ONTAP を推奨すること（[ストレージの評価と移行](https://aws.amazon.com/jp/blogs/migration-and-modernization/assess-and-migrate-storage-to-the-cloud-with-aws-transform/)）、ブロックストレージ移行が EC2 と FSx for ONTAP をサポートすること（[AWS Transform の FSx for ONTAP サポート（プレビュー）](https://aws.amazon.com/jp/about-aws/whats-new/2026/06/aws-transform-vmware-fsx-for-ontap-preview/)）です。
+これは文書上の検討であり、本リポジトリで実際に動かして確認した経路ではありません（確認したのはファイル起点の `DocIntake` に限ります）。前提となる機能は、AWS Transform のストレージ Assessment が File & Block に対応し FSx for ONTAP を推奨すること（[ストレージの評価と移行](https://aws.amazon.com/jp/blogs/migration-and-modernization/assess-and-migrate-storage-to-the-cloud-with-aws-transform/)）、ブロックストレージ移行が EC2 と FSx for ONTAP をサポートすること（[AWS Transform の FSx for ONTAP サポート（プレビュー）](https://aws.amazon.com/jp/about-aws/whats-new/2026/06/aws-transform-vmware-fsx-for-ontap-preview/)）です。
 
 ブロックストレージ移行の手順、データ保護・不変性、分析・AI 活用の詳細は、それぞれの責務を持つ隣の Spoke にあります（下の「関連する責務」を参照）。本リポジトリはアプリケーション側の移行を扱い、ブロック移行の実装は置きません。
 
-## 現在の検証済みカバレッジ
+## 確認した範囲
 
-現在の検証済みカバレッジは、1 つの `DocIntake` コンソールアプリと、その記録された実行経路に限ります。.NET Framework 4.8 / Windows / SMB を開始点とし、段階 2 では旧 Windows ビルドと近代化後の Linux ビルドを比較します。段階 2 は Windows .NET 10 の検証ではありません。段階 3 では .NET 10 managed-runtime Lambda と FSx for ONTAP S3 Access Points の経路を記録しています。次の表を、このリポジトリの唯一の完全な段階詳細表とします。
+実際に動かして確認したのは、1 つの `DocIntake` コンソールアプリと、その記録された実行経路に限ります。.NET Framework 4.8 / Windows / SMB を開始点とし、段階 2 では旧 Windows ビルドと近代化後の Linux ビルドを比較します。段階 2 は Windows .NET 10 の検証ではありません。段階 3 では .NET 10 managed-runtime Lambda と FSx for ONTAP S3 Access Points の経路を記録しています。次の表を、このリポジトリの唯一の完全な段階詳細表とします。
 
 各段階は前の段階の構成を前提にし、ボリュームのデータは移動しません。Windows のクライアントが残っている間は、ボリュームのセキュリティスタイルを NTFS のまま維持します。
 
@@ -61,31 +61,40 @@
 | 1 | 段階 0 と同じ `DocIntake` | SMB に加えて NFS（マルチプロトコル） | 同じ `appdata` ボリュームを NFS からも読み書きする |
 | 2 | .NET 10 on Amazon EC2（Linux） | NFS | 旧 Windows ビルドと近代化後の Linux ビルドを比較する。Windows .NET 10 の検証ではない |
 | 3 | .NET 10 managed-runtime Lambda（`dotnet10`） | FSx for ONTAP S3 Access Points | 手動 invocation で一部の処理を扱う。EventBridge Scheduler は無効化され、file-locking は現行スライスでスキップする |
-| 分岐 | コンテナ | NFS / SMB / S3 Access Points | 将来のナビゲーションと責務分担を示す分岐。`DocIntake` のコンテナ runtime は `open/not measured`。コンテナと他ワークロードの記録は隣の Spoke が公開している（[リンク](docs/ja/branch-containerization.md)） |
+| 分岐 | コンテナ | NFS / SMB / S3 Access Points | 将来のナビゲーションと責務分担を示す分岐。`DocIntake` のコンテナでの実行は、このリポジトリでは未確認。コンテナ × FSx for ONTAP は Container-Datastore Spoke が所有し記録している（[リンク](docs/ja/branch-containerization.md)） <!-- spoke-checked: spokes --> <!-- spoke-checked: container-datastore --> |
 
 ## エビデンス境界
 
-現在のエビデンスは、上記の `DocIntake` と、`ap-northeast-1` の検証専用 Single-AZ ファイルシステム、1 つの `appdata` ボリューム、`ntfs` セキュリティスタイル、ONTAP 9.19.1P2 と 9.19.1P3 の記録、および記録された実行経路にだけ適用します。`verified` は名前付きのスライスと環境で再現した実行、`field-observation` は再現を確認していない単発の観測、`documented` はリポジトリ内の成果物または引用した文書にある宣言でありランタイム実行ではなく、`open/not measured` は未実行、現在の記録で裏付けられていないもの、または検証済みスライスの外側を表します。
+現在のエビデンスは、上記の `DocIntake` と、`ap-northeast-1` の検証専用 Single-AZ ファイルシステム、1 つの `appdata` ボリューム、`ntfs` セキュリティスタイル、ONTAP 9.19.1P2 と 9.19.1P3 の記録、および記録された実行経路にだけ適用します。
 
-| 対象 | 証拠区分 | 記載範囲 |
+各記載には、それが何に裏づけられているかを添えます。下の 4 区分を使い、記載ごとにどれかを示します。
+
+| 裏づけ | 意味 |
+|---|---|
+| 検証済み | 名前付きのスライスと環境で、実際に動かして再現した実行です。日付・リージョン・ONTAP バージョン・構成を併記します。 |
+| 単発の観測 | 1 回だけ観測し、再現は確認していません。サービス上限や一般的な性能値へは一般化しません。 |
+| 文書上の記載 | リポジトリ内の成果物、または引用した文書にある宣言で、ここでは実際に動かして確認していません。出典を示します。 |
+| 未確認・範囲外 | 未実行、現在の記録で裏づけられていないもの、または確認した範囲の外側です。上の 3 区分とは分けて扱います。 |
+
+| 対象 | 裏づけ | 記載範囲 |
 |---|---|---|
-| 段階 0〜3 の実行記録 | `verified` | `DocIntake` を対象にした実行記録。各段階の構成と未実行の操作は分けて扱います。 |
-| ONTAP 9.19.1P2 の記録 | `verified` | 2026-10-07 の初回構築記録。 |
-| ONTAP 9.19.1P3 の記録 | `verified` | 2026-10-11〜12 の再構築記録。P2 の記録とは別の履歴です。 |
-| 単発の補助的な観測 | `field-observation` | 再現を確認していない観測。サービス上限や一般的な性能値へ一般化しません。 |
-| テンプレートの宣言 | `documented` | EventBridge Scheduler はテンプレートで無効化された宣言ですが、実行していません。 |
-| fake S3 テスト | `documented` | インメモリ fake を使うテストの事実です。実際の FSx for ONTAP S3 Access Points の挙動を証明しません。 |
-| 未実行または適用範囲外 | `open/not measured` | この節の未一般化範囲に記載します。 |
+| 段階 0〜3 の実行記録 | 検証済み | `DocIntake` を対象にした実行記録。各段階の構成と未実行の操作は分けて扱います。 |
+| ONTAP 9.19.1P2 の記録 | 検証済み | 2026-10-07 の初回構築記録。 |
+| ONTAP 9.19.1P3 の記録 | 検証済み | 2026-10-11〜12 の再構築記録。P2 の記録とは別の履歴です。 |
+| 単発の補助的な観測 | 単発の観測 | 再現を確認していない観測。サービス上限や一般的な性能値へ一般化しません。 |
+| テンプレートの宣言 | 文書上の記載 | EventBridge Scheduler はテンプレートで無効化された宣言ですが、実行していません。 |
+| fake S3 テスト | 文書上の記載 | インメモリ fake を使うテストの事実です。実際の FSx for ONTAP S3 Access Points の挙動を証明しません。 |
+| 未実行または適用範囲外 | 未確認・範囲外 | この節の未一般化範囲に記載します。 |
 
 現在の .NET エビデンスは、Java、Python、Node.js、Go、ASP.NET、ASP.NET Core、Web API、Web UI、ECS、EKS、Multi-AZ、`unix` または `mixed` セキュリティスタイル、その他の未検証ランタイム、トポロジー、アクセスパスには一般化しません。別のランタイムや構成を扱う場合は、そのパターン固有のエビデンスが必要です。
 
 現在の記録は Windows .NET 10 の検証、S3 全般の file-locking の有無、production performance、SLO、service limit、production cost estimate を確立しません。サンプル実行と本番見積り、この検証環境と一般的なサービス上限、設計上の考慮事項と法務・コンプライアンス判断を分けて扱います。
 
-| データ | 証拠区分 | 保存先 |
+| データ | 裏づけ | 保存先 |
 |---|---|---|
-| アプリケーションの入力と出力 | `verified` | FSx for ONTAP の `appdata` ボリュームです。 |
-| 集約した Probe JSON | `verified` | 別の artifacts バケットです。`appdata` の入力・出力とは分けています。 |
-| Lambda のログ | `verified` | CloudWatch Logs です。 |
+| アプリケーションの入力と出力 | 検証済み | FSx for ONTAP の `appdata` ボリュームです。 |
+| 集約した Probe JSON | 検証済み | 別の artifacts バケットです。`appdata` の入力・出力とは分けています。 |
+| Lambda のログ | 検証済み | CloudWatch Logs です。 |
 
 ## 文書の索引
 
@@ -100,7 +109,7 @@
 | 検証方法から得た教訓（対照のない計測は結果にならない、など） | [検証方法の教訓](docs/ja/verification-method-lessons.md) |
 | 検証環境の構成と費用の見積り | [検証環境](docs/ja/environment.md) |
 | サンプルアプリケーションの構成と 5 つの挙動 | [サンプルアプリ](docs/ja/sample-app.md) |
-| コンテナ分岐（`DocIntake` は未計測。隣の Spoke の記録へのリンクあり） | [分岐: コンテナ化](docs/ja/branch-containerization.md) |
+| コンテナ分岐（`DocIntake` はここでは未確認。隣の Spoke の記録へのリンクあり） | [分岐: コンテナ化](docs/ja/branch-containerization.md) |
 
 英語版は [docs/en/](docs/en/stage-0-smb-ntfs.md) にあり、節構造は日本語版と一致させています。
 
@@ -110,9 +119,9 @@
 |---|---|
 | リージョン | `ap-northeast-1`（FSx for ONTAP を含むインフラ） |
 | FSx for ONTAP の構成 | 検証専用の Single-AZ ファイルシステム、1 つの `appdata` ボリューム、`ntfs` セキュリティスタイル |
-| ONTAP 9.19.1P2 の履歴 | `verified`。2026-10-07 の初回構築記録。 |
-| ONTAP 9.19.1P3 の履歴 | `verified`。2026-10-11〜12 の再構築記録。P2 とは別の歴史的記録。 |
-| セキュリティスタイル | `ntfs`。段階 2 の判断で維持しています。`unix` と `mixed` は `open/not measured` です。 |
+| ONTAP 9.19.1P2 の履歴 | 検証済み。2026-10-07 の初回構築記録。 |
+| ONTAP 9.19.1P3 の履歴 | 検証済み。2026-10-11〜12 の再構築記録。P2 とは別の歴史的記録。 |
+| セキュリティスタイル | `ntfs`。段階 2 の判断で維持しています。`unix` と `mixed` は未確認です。 |
 | ディレクトリ | AWS Managed Microsoft AD |
 | IaC | AWS CloudFormation（YAML）。`cfn-lint` と `cfn-guard` を通す構成です。 |
 | AIMF | v0.11.0 に固定。2026-10-12 のセッションは kiro-cli 2.29.1 の V2 対話モードで実施。 |
@@ -124,11 +133,11 @@ AWS へのデプロイは、構成・所要時間・費用の見積りを提示�
 
 ## 今後のパターンロードマップ
 
-将来のパターンは、独立して仕様化され、エビデンスがそろうまで `open/not measured` とします。各パターンは、固有の requirements、design、evidence ledger、verification conditions、publication criteria を持つ必要があります。現在の `DocIntake` の記録を別のパターンの証拠として再利用せず、サンプル実行と本番見積り、個別環境と一般的なサービス上限を分けて記録します。
+将来のパターンは、独立して仕様化され、エビデンスがそろうまで未確認とします。各パターンは、固有の要件、設計、検証記録、検証条件、公開基準を持つ必要があります。現在の `DocIntake` の記録を別のパターンの証拠として再利用せず、サンプル実行と本番見積り、個別環境と一般的なサービス上限を分けて記録します。
 
 ## 関連する責務
 
-旅程全体とリポジトリの関係図は Hub の旅程マップだけが持ちます。以下のリンクはナビゲーションと責務の所有範囲を示す `documented` なコンテキストであり、リンク先の記載はこの Spoke の検証済みカバレッジを拡張しません。AIMF はアプリケーション・モダナイゼーションのワークフロー境界です。この Spoke は、AIMF が扱わない FSx for ONTAP 側のストレージ、プロトコル、権限、エビデンス境界を補足します。
+旅程全体とリポジトリの関係図は Hub の旅程マップだけが持ちます。以下のリンクはナビゲーションと責務の所有範囲を示す文書上のコンテキストで、リンク先の記載はこの Spoke で動作を確認した範囲を広げるものではありません。AIMF はアプリケーション・モダナイゼーションのワークフロー境界です。この Spoke は、AIMF が扱わない FSx for ONTAP 側のストレージ、プロトコル、権限、エビデンス境界を補足します。
 
 [AI Modernization Flow](https://github.com/aws-samples/sample-ai-modernization-flow)（[日本語版ドキュメント（原本）](https://github.com/aws-samples/sample-ai-modernization-flow/tree/main/ja)、[紹介ブログ](https://aws.amazon.com/jp/blogs/news/aidm-introducing-ai-modernization-flow/)）は、AI エージェントに決められた段階でアプリケーションの移行を進めさせるワークフローです。Method（移行方法論）・Playbook（ドメイン固有の知見）・Harness（AI 実行規律）の 3 階層で、レガシーなアプリケーションのアセスメントから移行までを進めます。AIMF が作る作業記録のリポジトリは公開しない作業領域に置き、公開するのは結果の抜粋だけです。2026-10-12 に実施したセッションの手順、ADR の要旨、ハーネスが機械的に止める範囲と止めない範囲は[段階 2](docs/ja/stage-2-aimf-modern-dotnet.md)にあります。
 
