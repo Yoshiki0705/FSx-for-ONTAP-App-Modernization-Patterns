@@ -2,7 +2,7 @@
 
 [日本語](README.md) | **English**
 
-This repository covers patterns for modernizing legacy applications and systems while their data remains on Amazon FSx for NetApp ONTAP: a shared storage service that runs NetApp ONTAP as an AWS managed service, so one volume is reachable over NFS, SMB, and S3 Access Points at the same time. The current verified slice is one purpose-built `DocIntake` console application recorded from .NET Framework 4.8 / Windows / SMB to .NET 10 / Linux / NFS, and then to .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points. The broad scope is a project boundary, not verified support for every runtime or topology.
+This repository covers patterns for modernizing legacy applications and systems while their data remains on Amazon FSx for NetApp ONTAP: a shared storage service that runs NetApp ONTAP as an AWS managed service, so one volume is reachable over NFS, SMB, and S3 Access Points at the same time. What has actually been run and confirmed is one purpose-built `DocIntake` console application recorded from .NET Framework 4.8 / Windows / SMB to .NET 10 / Linux / NFS, and then to .NET 10 managed-runtime Lambda / FSx for ONTAP S3 Access Points. The broad scope is a project boundary; not every runtime or topology has been confirmed.
 
 The application input and output remain in the `appdata` volume on FSx for ONTAP; the application side and the protocol side change one stage at a time.
 
@@ -12,19 +12,19 @@ New to this repository? Read in this order.
 
 1. **Why this works without moving data.** The intro above and [Repository scope](#repository-scope) explain the idea: keep the data on one FSx for ONTAP volume and change the application side and the access protocol one stage at a time.
 2. **Find your own application.** [Legacy application examples and how to map them](#legacy-application-examples-and-how-to-map-them) maps common legacy stacks (Java, .NET, COBOL, file-share-bound apps) to a reading entry point here.
-3. **See what was actually verified.** [Current verified coverage](#current-verified-coverage) and [Evidence boundary](#evidence-boundary) state exactly what was tested and what was not. Nothing here is a general compatibility claim.
+3. **See what was actually confirmed.** [What was confirmed](#what-was-confirmed) and [Evidence boundary](#evidence-boundary) state exactly what was tested and what was not. Nothing here is a general compatibility claim.
 4. **Read a stage or reproduce it.** The [Document index](#document-index) links each stage document and the [Reproduction guide](docs/en/reproduce.md).
 5. **Follow a data-use path beyond this Spoke.** [Related responsibilities](#related-responsibilities) links the adjacent repositories for containers, analytics, permission-aware RAG, and more serverless processing.
 
 ## Repository scope
 
-The durable scope of this repository is patterns for modernizing legacy applications and systems while their data remains on FSx for ONTAP. It covers pattern-specific requirements, designs, implementations, verification records, evidence boundaries, and navigation. The current `DocIntake` record is one example within this broad scope. It is not a compatibility statement for another runtime, application shape, execution topology, or access path.
+The durable scope of this repository is patterns for modernizing legacy applications and systems while their data remains on FSx for ONTAP. It covers pattern-specific requirements, designs, implementations, verification records, the boundaries of what was confirmed, and navigation. The current `DocIntake` record is one example within this broad scope. It is not a compatibility statement for another runtime, application shape, execution topology, or access path.
 
 ## Legacy application examples and how to map them
 
 This repository verifies one `DocIntake`, but the same approach reads across many legacy applications that keep their data on a file share while moving the runtime. The table below lists stacks that are common modernization targets. Start from the row closest to your own application, then follow it to this repository's verification (stages 0–3 and the container branch) and to the modernization means (AIMF, AWS Transform).
 
-Each link is an external `documented` example; it does not expand this repository's verified coverage, and it does not assert any vendor or product superiority. It is an entry point to help you identify your own stack.
+Each link is an external, documentation-only example; it does not expand what this repository has confirmed by running, and it does not assert any vendor or product superiority. It is an entry point to help you identify your own stack.
 
 | Legacy example | Typical modernization | Reference links (external) | Related verification here |
 |---|---|---|---|
@@ -38,20 +38,20 @@ A legacy application that depends on a file share loses its own filesystem state
 
 The modernization means are AI Modernization Flow (AIMF) and AWS Transform, under "Related responsibilities" below. For any legacy example, you can read it through this repository's shape: keep the data on FSx for ONTAP, and change the application side and the access protocol one stage at a time.
 
-### Block-storage starting point (documented)
+### Block-storage starting point (documentation only, not run here)
 
 The examples above assume file access, but the entry point is not only a file share. Workloads running on FC / iSCSI block storage on premises (databases, SQL Server FCI, and so on) can also be considered for modernization and optimization by moving them to FSx for ONTAP.
 
 - Modernization (data use): changing from block to file access makes multiprotocol access (iSCSI / NFS / SMB / S3 Access Points) available on the same volume. With S3 API user mapping, you can extend to data use (analytics, AI integration) through S3 Access Points.
 - Optimization (data protection, availability, loose coupling): you can consider access-pattern tiering (FabricPool), data protection with Snapshot / SnapMirror / FlexClone, high availability via Multi-AZ iSCSI multipath, and loose coupling / portability through non-disruptive testing with FlexClone.
 
-This is a `documented` consideration, not a path this repository verified in a real environment (the verified coverage is limited to the file-originated `DocIntake`). The enabling capabilities are that the AWS Transform storage assessment supports File & Block and recommends FSx for ONTAP ([assess and migrate storage](https://aws.amazon.com/blogs/migration-and-modernization/assess-and-migrate-storage-to-the-cloud-with-aws-transform/)), and that block storage migration supports EC2 and FSx for ONTAP ([AWS Transform FSx for ONTAP support (preview)](https://aws.amazon.com/about-aws/whats-new/2026/06/aws-transform-vmware-fsx-for-ontap-preview/)).
+This is a documentation-only consideration, not a path this repository has run and confirmed (what was confirmed is limited to the file-originated `DocIntake`). The enabling capabilities are that the AWS Transform storage assessment supports File & Block and recommends FSx for ONTAP ([assess and migrate storage](https://aws.amazon.com/blogs/migration-and-modernization/assess-and-migrate-storage-to-the-cloud-with-aws-transform/)), and that block storage migration supports EC2 and FSx for ONTAP ([AWS Transform FSx for ONTAP support (preview)](https://aws.amazon.com/about-aws/whats-new/2026/06/aws-transform-vmware-fsx-for-ontap-preview/)).
 
 The details of block storage migration, data protection and immutability, and analytics / AI use live in the adjacent Spokes that own those responsibilities (see "Related responsibilities" below). This repository covers the application side and does not host the block migration implementation.
 
-## Current verified coverage
+## What was confirmed
 
-Current verified coverage is limited to one `DocIntake` console application and its recorded execution paths. The source is .NET Framework 4.8 / Windows / SMB. Stage 2 compares the old Windows build with the modernized Linux build; it is not Windows .NET 10 verification. Stage 3 records the .NET 10 managed-runtime Lambda and FSx for ONTAP S3 Access Points path. The table below is the repository's only full stage-detail table.
+What was run and confirmed is limited to one `DocIntake` console application and its recorded execution paths. The source is .NET Framework 4.8 / Windows / SMB. Stage 2 compares the old Windows build with the modernized Linux build; it is not Windows .NET 10 verification. Stage 3 records the .NET 10 managed-runtime Lambda and FSx for ONTAP S3 Access Points path. The table below is the repository's only full stage-detail table.
 
 Each stage assumes the previous one, and volume data is never moved. The volume keeps the NTFS security style for as long as Windows clients remain.
 
@@ -60,32 +60,41 @@ Each stage assumes the previous one, and volume data is never moved. The volume 
 | 0 | .NET Framework 4.8 on Amazon EC2 (Windows) | SMB (`ntfs` security style, SVM joined to AWS Managed Microsoft AD) | Reproduce the starting configuration |
 | 1 | The same `DocIntake` as stage 0 | SMB plus NFS (multiprotocol) | Read and write the same `appdata` volume over NFS |
 | 2 | .NET 10 on Amazon EC2 (Linux) | NFS | Compare the old Windows build with the modernized Linux build. This is not Windows .NET 10 verification |
-| 3 | .NET 10 managed-runtime Lambda (`dotnet10`) | FSx for ONTAP S3 Access Points | Handle part of the processing through manual invocation. EventBridge Scheduler is disabled, and file locking is skipped in the current slice |
-| Branch | Containers | NFS / SMB / S3 Access Points | A future navigation and ownership path. `DocIntake` container runtime is `open/not measured`. Adjacent Spokes publish records for containers and other workloads ([links](docs/en/branch-containerization.md)) |
+| 3 | .NET 10 managed-runtime Lambda (`dotnet10`) | FSx for ONTAP S3 Access Points | Handle part of the processing through manual invocation. EventBridge Scheduler is disabled, and file locking is out of scope in the current slice |
+| Branch | Containers | NFS / SMB / S3 Access Points | A future navigation and ownership path. Running `DocIntake` in a container is not confirmed in this repository; the Container-Datastore Spoke owns and records container-on-FSx for ONTAP ([links](docs/en/branch-containerization.md)) <!-- spoke-checked: spokes --> <!-- spoke-checked: container-datastore --> |
 
 ## Evidence boundary
 
-Current evidence applies only to the `DocIntake` slice, the dedicated verification Single-AZ file system in `ap-northeast-1`, its one `appdata` volume, its `ntfs` security style, the recorded ONTAP 9.19.1P2 and 9.19.1P3 versions, and the recorded execution paths. `verified` means a reproduced execution for the named slice and environment; `field-observation` means a one-off observation without confirmed reproduction; `documented` means a declaration in a repository artifact or cited documentation and not runtime execution; and `open/not measured` means unexecuted, unsupported by the current record, or outside the verified slice.
+Current evidence applies only to the `DocIntake` slice, the dedicated verification Single-AZ file system in `ap-northeast-1`, its one `appdata` volume, its `ntfs` security style, the recorded ONTAP 9.19.1P2 and 9.19.1P3 versions, and the recorded execution paths.
 
-| Subject | Evidence label | Scope of the statement |
+Each statement carries what stands behind it, using the four labels below.
+
+| What stands behind it | Meaning |
+|---|---|
+| Confirmed by running | A reproduced execution for the named slice and environment. The date, region, ONTAP version, and configuration are stated. |
+| One-off observation | Observed once; reproduction not confirmed. Not generalized into a service limit or a general performance value. |
+| Documentation only | A declaration in a repository artifact or cited documentation, not run and confirmed here. The source is identified. |
+| Not run / out of scope | Unexecuted, unsupported by the current record, or outside what was confirmed. Kept separate from the three labels above. |
+
+| Subject | What stands behind it | Scope of the statement |
 |---|---|---|
-| Execution records for stages 0 to 3 | `verified` | Execution records for `DocIntake`. Each stage's configuration and unexecuted operations remain separate. |
-| ONTAP 9.19.1P2 record | `verified` | Initial build record from 2026-10-07. |
-| ONTAP 9.19.1P3 record | `verified` | Rebuild record from 2026-10-11 to 12. It is a separate historical record from P2. |
-| One-off supporting observations | `field-observation` | Observations without confirmed reproduction. They are not generalized into service limits or general performance values. |
-| Template declarations | `documented` | EventBridge Scheduler is declared disabled in the template, but it was not executed. |
-| Fake S3 tests | `documented` | The tests use an in-memory fake. They do not prove real FSx for ONTAP S3 Access Points behavior. |
-| Unexecuted or out-of-scope items | `open/not measured` | Listed in the non-generalization boundary in this section. |
+| Execution records for stages 0 to 3 | Confirmed by running | Execution records for `DocIntake`. Each stage's configuration and unexecuted operations remain separate. |
+| ONTAP 9.19.1P2 record | Confirmed by running | Initial build record from 2026-10-07. |
+| ONTAP 9.19.1P3 record | Confirmed by running | Rebuild record from 2026-10-11 to 12. It is a separate historical record from P2. |
+| One-off supporting observations | One-off observation | Observations without confirmed reproduction. They are not generalized into service limits or general performance values. |
+| Template declarations | Documentation only | EventBridge Scheduler is declared disabled in the template, but it was not executed. |
+| Fake S3 tests | Documentation only | The tests use an in-memory fake. They do not prove real FSx for ONTAP S3 Access Points behavior. |
+| Unexecuted or out-of-scope items | Not run / out of scope | Listed in the non-generalization boundary in this section. |
 
 Current .NET evidence is not generalized to Java, Python, Node.js, Go, ASP.NET, ASP.NET Core, Web API, Web UI, ECS, EKS, Multi-AZ, `unix` or `mixed` security style, or any other unverified runtime, topology, or access path. Another runtime or configuration requires evidence for its own pattern.
 
 The current record does not establish Windows .NET 10 verification, universal S3 file-locking behavior, production performance, an SLO, a service limit, or a production cost estimate. A sample run remains distinct from a production estimate, this verification environment remains distinct from a general service limit, and a design consideration remains distinct from a legal or compliance judgment.
 
-| Data | Evidence label | Destination |
+| Data | What stands behind it | Destination |
 |---|---|---|
-| Application input and output | `verified` | The `appdata` volume on FSx for ONTAP. |
-| Aggregate Probe JSON | `verified` | A separate artifacts bucket, distinct from the `appdata` input and output. |
-| Lambda logs | `verified` | CloudWatch Logs. |
+| Application input and output | Confirmed by running | The `appdata` volume on FSx for ONTAP. |
+| Aggregate Probe JSON | Confirmed by running | A separate artifacts bucket, distinct from the `appdata` input and output. |
+| Lambda logs | Confirmed by running | CloudWatch Logs. |
 
 ## Document index
 
@@ -100,7 +109,7 @@ The current record does not establish Windows .NET 10 verification, universal S3
 | Lessons from the verification method (a measurement without a positive control is not a result, and others) | [Verification method lessons](docs/en/verification-method-lessons.md) |
 | Environment structure and cost estimates | [Verification environment](docs/en/environment.md) |
 | Sample application structure and the five behaviors | [Sample app](docs/en/sample-app.md) |
-| Container branch (`DocIntake` not measured; links to adjacent Spoke records) | [Branch: containerization](docs/en/branch-containerization.md) |
+| Container branch (`DocIntake` not confirmed here; links to adjacent Spoke records) | [Branch: containerization](docs/en/branch-containerization.md) |
 
 The Japanese documents under [docs/ja/](docs/ja/stage-0-smb-ntfs.md) are the reference; the English ones keep the same section structure.
 
@@ -110,9 +119,9 @@ The Japanese documents under [docs/ja/](docs/ja/stage-0-smb-ntfs.md) are the ref
 |---|---|
 | Region | `ap-northeast-1` (infrastructure including FSx for ONTAP) |
 | FSx for ONTAP configuration | Dedicated verification Single-AZ file system, one `appdata` volume, and `ntfs` security style |
-| ONTAP 9.19.1P2 record | `verified`. Initial build record from 2026-10-07. |
-| ONTAP 9.19.1P3 record | `verified`. Rebuild record from 2026-10-11 to 12. A separate historical record from P2. |
-| Security style | `ntfs`, kept by the stage 2 decision. `unix` and `mixed` are `open/not measured`. |
+| ONTAP 9.19.1P2 record | Confirmed by running. Initial build record from 2026-10-07. |
+| ONTAP 9.19.1P3 record | Confirmed by running. Rebuild record from 2026-10-11 to 12. A separate historical record from P2. |
+| Security style | `ntfs`, kept by the stage 2 decision. `unix` and `mixed` are not confirmed. |
 | Directory | AWS Managed Microsoft AD |
 | IaC | AWS CloudFormation (YAML), checked with `cfn-lint` and `cfn-guard` |
 | AIMF | Pinned to v0.11.0. The 2026-10-12 session ran in kiro-cli 2.29.1 V2 interactive mode |
@@ -124,11 +133,11 @@ Every deployment to AWS is preceded by an estimate of configuration, duration, a
 
 ## Future pattern roadmap
 
-Future patterns remain `open/not measured` until they are independently specified and evidenced. Each pattern requires its own requirements, design, evidence ledger, verification conditions, and publication criteria. The current `DocIntake` records are not reused as evidence for another pattern. The record must keep sample runs separate from production estimates and this environment separate from general service limits.
+Future patterns remain not confirmed until they are independently specified and evidenced. Each pattern requires its own requirements, design, verification records, verification conditions, and publication criteria. The current `DocIntake` records are not reused as evidence for another pattern. The record must keep sample runs separate from production estimates and this environment separate from general service limits.
 
 ## Related responsibilities
 
-Only the Hub journey map holds the overall journey and the diagram of how the repositories relate. The links below are `documented` navigation and ownership context; their content does not expand this Spoke's verified coverage. AIMF remains the application-modernization workflow boundary. This Spoke adds the FSx for ONTAP storage, protocol, permission, and evidence boundaries that AIMF does not cover.
+Only the Hub journey map holds the overall journey and the diagram of how the repositories relate. The links below are navigation and ownership context from documentation; they do not expand what this Spoke confirmed by running. AIMF remains the application-modernization workflow boundary. This Spoke adds the FSx for ONTAP storage, protocol, permission, and evidence boundaries that AIMF does not cover.
 
 [AI Modernization Flow](https://github.com/aws-samples/sample-ai-modernization-flow) ([Japanese documentation (source of truth)](https://github.com/aws-samples/sample-ai-modernization-flow/tree/main/ja), [introductory blog post, Japanese](https://aws.amazon.com/jp/blogs/news/aidm-introducing-ai-modernization-flow/)) is a workflow that has an AI agent carry out an application migration through fixed phases. It runs the assessment-to-migration flow for a legacy application across three layers: Method (the migration methodology), Playbook (domain-specific knowledge), and Harness (AI execution discipline). The working-record repository AIMF creates stays in an unpublished workspace; only excerpts of the results are published. The session run on 2026-10-12, the ADR summaries, and what the harness does and does not enforce mechanically are in [stage 2](docs/en/stage-2-aimf-modern-dotnet.md).
 
