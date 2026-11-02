@@ -2,6 +2,6 @@
 # boto3 is provided by the Lambda runtime at deploy time; it is a dev dependency here for local
 # tests. moto fakes S3 locally so the Tier 1 tests exercise the handler's dispatch and output shape
 # without a real FSx for ONTAP S3 Access Point (which is a Tier 2/3 concern).
-boto3==1.43.119
+boto3==1.43.123
 moto==5.2.4
 pytest==9.1.1
