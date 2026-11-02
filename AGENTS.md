@@ -29,9 +29,10 @@ Bilingual: Japanese is primary (`README.md`, `docs/ja/`), English mirrors it (`R
 ## Core commands
 
 ```bash
-make install   # .venv with the pins in requirements-dev.txt (ruff, cfn-lint)
-make all       # lint + audit + links + drift + app-modern + test: the commit gate
+make install   # .venv with the pins in requirements-dev.txt (ruff, cfn-lint, pip-audit)
+make all       # lint + audit + links + drift + deps-audit + app-modern + test: the commit gate
 make app-modern  # build and test app/modern (needs the .NET SDK 10; fails without it)
+make deps-audit  # scan dependencies for known vulnerabilities (pip-audit + dotnet --vulnerable; needs network)
 ```
 
 Never read a gate's result off a pipe. `make all | tail` returns tail's status. Use
