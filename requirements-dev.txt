@@ -3,6 +3,7 @@
 # The validators in tools/ and scripts/ are stdlib-only and are not listed here.
 ruff==0.17.3
 cfn-lint==1.59.0
+pip-audit==2.10.1
 # Not installable via pip; install separately:
 #   markdownlint-cli2   npm install -g markdownlint-cli2@0.22.1
 #   gitleaks            brew install gitleaks

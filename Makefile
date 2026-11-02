@@ -217,8 +217,26 @@ inbound-probes: ## 他リポジトリが pin した文字列が指定の文書�
 inbound-probes-refresh: ## 兄弟リポジトリの公開契約を読み直して契約ファイルを更新（gh とネットワーク必須）
 	$(PYTHON) tools/check_inbound_probes.py --refresh
 
+.PHONY: deps-audit
+deps-audit: ## 依存の既知脆弱性スキャン（Python: pip-audit、.NET: dotnet list --vulnerable。検出で失敗）
+	@test -n "$(call tool,pip-audit)" || { echo "error: pip-audit is not installed. Run: make install"; exit 1; }
+	@# Python: scan every pinned requirements file. pip-audit exits non-zero on a finding.
+	$(call tool,pip-audit) -r requirements-dev.txt --progress-spinner off
+	$(call tool,pip-audit) -r app/candidate-c/requirements-dev.txt --progress-spinner off
+	$(call tool,pip-audit) -r app/candidate-c-rest/requirements-dev.txt --progress-spinner off
+	@# .NET: dotnet exits 0 even when it lists vulnerabilities. The vulnerable-package
+	@# table prints each affected package on a line beginning with '>', which never
+	@# appears in the "has no vulnerable packages" output, so fail on any such line.
+	$(call need,dotnet,https://dotnet.microsoft.com/download/dotnet/10.0)
+	@dotnet restore app/modern/DocIntake.sln --nologo >/dev/null
+	@out=$$(dotnet list app/modern/DocIntake.sln package --vulnerable --include-transitive 2>&1); \
+	echo "$$out"; \
+	if echo "$$out" | grep -qE '^[[:space:]]*>'; then \
+		echo "error: vulnerable NuGet package(s) reported above"; exit 1; \
+	fi
+
 .PHONY: ci
-ci: lint audit links drift inbound-probes app-modern app-candidate-b app-candidates-python test ## CI が呼ぶ集約ターゲット
+ci: lint audit links drift inbound-probes deps-audit app-modern app-candidate-b app-candidates-python test ## CI が呼ぶ集約ターゲット
 
 .PHONY: all
 all: ci ## コミット前のゲート（ci と同じ）
