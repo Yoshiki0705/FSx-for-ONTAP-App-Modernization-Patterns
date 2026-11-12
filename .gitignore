@@ -33,3 +33,6 @@ node_modules/
 # Candidate build outputs
 .venv-candidates/
 target/
+
+# Local cross-repo agent notifications (reviewed by a human, not tracked)
+docs/agent/notifications/
