@@ -1,0 +1,26 @@
+{
+  "schema_version": "1",
+  "name": "fsxn-app-modernization-agent",
+  "repo": "fsxn-app-modernization",
+  "description": "Agent for the FSx for ONTAP application modernization repository. Owns documentation quality, verification scripts and cross-repo reference integrity for this Spoke.",
+  "skills": [
+    "quality_gate",
+    "cross_repo_notification"
+  ],
+  "quality_gates": [
+    "make cross-repo-agent",
+    "make ci"
+  ],
+  "cross_repo_targets": [
+    {
+      "repo": "fsxn-adoption-playbook",
+      "relationship": "hub",
+      "types": ["reference_update", "feedback"]
+    }
+  ],
+  "action_policy": {
+    "auto_allowed": ["lint", "audit", "links", "drift", "inbound_probes", "test"],
+    "human_required": ["branch_create", "commit", "pr_create", "push", "cross_repo_write", "cloud_resource_create"]
+  },
+  "notification_dir": "docs/agent/notifications"
+}

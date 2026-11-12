@@ -240,3 +240,12 @@ ci: lint audit links drift inbound-probes deps-audit app-modern app-candidate-b 
 
 .PHONY: all
 all: ci ## コミット前のゲート（ci と同じ）
+
+# Called by the Kiro Bot supervisor (~/.kiro/hooks/scripts/cross_repo_agent.py run). Do not call
+# the supervisor from here: it calls this target, so doing both recurses until the timeout.
+# Same gates as `ci` without the language builds (dotnet, mvn, candidate venvs) and deps-audit,
+# which needs the network. `make ci` stays the full pre-commit gate.
+.PHONY: cross-repo-agent
+cross-repo-agent: lint audit links drift inbound-probes test ## Kiro Bot の supervisor が呼ぶゲート（ビルドとネットワーク依存を除く ci）
+	@mkdir -p docs/agent/notifications
+	@echo "cross-repo-agent: gates passed."
