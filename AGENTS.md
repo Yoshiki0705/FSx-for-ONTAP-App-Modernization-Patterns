@@ -40,6 +40,10 @@ Never read a gate's result off a pipe. `make all | tail` returns tail's status. 
 inventory: [docs/agent/quality-gates.md](docs/agent/quality-gates.md). `make drift` fails when this
 file or `CONTRIBUTING.md` names a `make` target that the Makefile does not define.
 
+For a long-running autonomous session, the decision-record placement, evidence words, and recurring
+task-type checklists specific to this repository are in
+[docs/agent/long-session-discipline.md](docs/agent/long-session-discipline.md).
+
 ## Naming (applies to every file, diagram, comment, and commit)
 
 - First mention: **Amazon FSx for NetApp ONTAP**. Thereafter: **FSx for ONTAP**. No other form.
