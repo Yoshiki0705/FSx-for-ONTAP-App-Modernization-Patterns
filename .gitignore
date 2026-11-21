@@ -36,3 +36,6 @@ target/
 
 # Local cross-repo agent notifications (reviewed by a human, not tracked)
 docs/agent/notifications/
+# Screenshot tool working files and nested session worktrees
+.playwright-mcp/
+.worktrees/
